@@ -62,7 +62,7 @@ The GLM policy is implemented as a provider applier after canonical `ThinkingCon
 
 - GLM-5.3 preserves `low`, maps medium/high to `high`, and maps xhigh/max equivalents to `max`.
 - Older GLM models map low/medium/high to `high` and xhigh/max equivalents to `max`.
-- The Anthropic-compatible GLM-5.3 request uses `thinking.type=enabled` and `output_config.effort=low|high|max` when that exit protocol is selected.
+- Anthropic client requests use the existing translator and exit through the OpenAI-compatible Coding Plan Chat Completions endpoint, where GLM reasoning is expressed as `reasoning_effort`. A native Anthropic GLM executor and `output_config.effort` are outside this delivery.
 
 The generic translator remains provider-neutral.
 

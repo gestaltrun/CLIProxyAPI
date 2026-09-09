@@ -358,7 +358,7 @@ func (s *Service) latestAuthForModelRegistration(authID string) (*coreauth.Auth,
 	return auth, true
 }
 
-const glmModelsMaxBodyBytes int64 = 1 << 20
+var glmModelsMaxBodyBytes int64 = 1 << 20
 
 func (s *Service) fetchGLMModelsForAuth(ctx context.Context, auth *coreauth.Auth) ([]*ModelInfo, error) {
 	if auth == nil || auth.Attributes == nil {

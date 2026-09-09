@@ -13,6 +13,46 @@ import (
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
+func TestFetchGLMModelsFailureMatrix(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+		body       string
+		bodyLimit  int64
+		wantClass  string
+	}{
+		{name: "empty", statusCode: http.StatusOK, body: `{"data":[]}`, wantClass: "invalid_response"},
+		{name: "malformed", statusCode: http.StatusOK, body: `{`, wantClass: "invalid_response"},
+		{name: "unauthorized", statusCode: http.StatusUnauthorized, body: `{}`, wantClass: "authentication"},
+		{name: "upstream", statusCode: http.StatusBadGateway, body: `{}`, wantClass: "upstream"},
+		{name: "body limit", statusCode: http.StatusOK, body: `{"data":[{"id":"glm-5.3"}]}`, bodyLimit: 4, wantClass: "invalid_response"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			oldLimit := glmModelsMaxBodyBytes
+			if test.bodyLimit > 0 {
+				glmModelsMaxBodyBytes = test.bodyLimit
+				defer func() { glmModelsMaxBodyBytes = oldLimit }()
+			}
+			service := &Service{
+				glmResolveEndpoints: func(string, string) (glm.Endpoints, error) {
+					return glm.Endpoints{ModelsURL: "https://fixture.invalid/models"}, nil
+				},
+				glmHTTPClient: func(context.Context, *coreauth.Auth, time.Duration) *http.Client {
+					return &http.Client{Transport: serviceRoundTripper(func(*http.Request) (*http.Response, error) {
+						return &http.Response{StatusCode: test.statusCode, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(test.body))}, nil
+					})}
+				},
+			}
+			auth := &coreauth.Auth{ID: "glm-failure", Provider: glm.Provider, Attributes: map[string]string{"api_key": "secret", "glm_site": glm.SiteCN}}
+			_, err := service.fetchGLMModelsForAuth(context.Background(), auth)
+			if err == nil || classifyGLMModelDiscoveryError(err) != test.wantClass {
+				t.Fatalf("err=%v class=%q want=%q", err, classifyGLMModelDiscoveryError(err), test.wantClass)
+			}
+		})
+	}
+}
+
 func TestFetchGLMModelsForAuthUsesBearerAndDynamicCatalog(t *testing.T) {
 	var request *http.Request
 	service := &Service{
