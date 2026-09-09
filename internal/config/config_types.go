@@ -671,6 +671,18 @@ func (m GeminiModel) GetIsCompat() bool        { return m.IsCompat }
 
 func (m GeminiModel) GetThinking() *registry.ThinkingSupport { return m.Thinking }
 
+// GLMCodingPlanKey configures one GLM Coding Plan API key credential.
+type GLMCodingPlanKey struct {
+	APIKey       string `yaml:"api-key" json:"api-key"`
+	Site         string `yaml:"site,omitempty" json:"site,omitempty"`
+	Priority     int    `yaml:"priority,omitempty" json:"priority,omitempty"`
+	Weight       *int   `yaml:"weight,omitempty" json:"weight,omitempty"`
+	Prefix       string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	ProxyURL     string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+	Organization string `yaml:"organization,omitempty" json:"organization,omitempty"`
+	Project      string `yaml:"project,omitempty" json:"project,omitempty"`
+}
+
 // OpenAICompatibility represents the configuration for OpenAI API compatibility
 // with external providers, allowing model aliases to be routed through OpenAI API format.
 type OpenAICompatibility struct {

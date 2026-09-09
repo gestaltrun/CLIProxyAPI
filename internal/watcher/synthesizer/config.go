@@ -7,6 +7,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/constant"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/glm"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/diff"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -52,6 +53,8 @@ func (s *ConfigSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth,
 	out = append(out, s.synthesizeCodexKeys(ctx)...)
 	// xAI API Keys
 	out = append(out, s.synthesizeXAIKeys(ctx)...)
+	// GLM Coding Plan API Keys
+	out = append(out, s.synthesizeGLMCodingPlanKeys(ctx)...)
 	// OpenAI-compat
 	out = append(out, s.synthesizeOpenAICompat(ctx)...)
 	// Vertex-compat
@@ -272,6 +275,59 @@ func (s *ConfigSynthesizer) synthesizeCodexStyleKeys(ctx *SynthesisContext, entr
 			a.Metadata = nil
 		}
 		out = append(out, a)
+	}
+	return out
+}
+
+func (s *ConfigSynthesizer) synthesizeGLMCodingPlanKeys(ctx *SynthesisContext) []*coreauth.Auth {
+	cfg := ctx.Config
+	out := make([]*coreauth.Auth, 0, len(cfg.GLMCodingPlan))
+	for i := range cfg.GLMCodingPlan {
+		entry := cfg.GLMCodingPlan[i]
+		key := strings.TrimSpace(entry.APIKey)
+		if key == "" {
+			continue
+		}
+		endpoints, errEndpoints := glm.ResolveEndpoints(entry.Site)
+		if errEndpoints != nil {
+			continue
+		}
+		site := strings.ToLower(strings.TrimSpace(entry.Site))
+		if site == "" {
+			site = glm.SiteCN
+		}
+		proxyURL := strings.TrimSpace(entry.ProxyURL)
+		prefix := strings.TrimSpace(entry.Prefix)
+		id, token := ctx.IDGenerator.Next("glm-coding-plan:apikey", key, site, proxyURL, prefix)
+		attrs := map[string]string{
+			"source":       fmt.Sprintf("config:glm-coding-plan[%s]", token),
+			"config_index": strconv.Itoa(i),
+			"api_key":      key,
+			"base_url":     endpoints.CodingBaseURL,
+			"glm_site":     site,
+			"auth_kind":    "apikey",
+		}
+		if organization := strings.TrimSpace(entry.Organization); organization != "" {
+			attrs["glm_organization"] = organization
+		}
+		if project := strings.TrimSpace(entry.Project); project != "" {
+			attrs["glm_project"] = project
+		}
+		if entry.Priority != 0 {
+			attrs["priority"] = strconv.Itoa(entry.Priority)
+		}
+		addWeightToAttrs(entry.Weight, attrs)
+		out = append(out, &coreauth.Auth{
+			ID:         id,
+			Provider:   glm.Provider,
+			Label:      "GLM Coding Plan",
+			Prefix:     prefix,
+			Status:     coreauth.StatusActive,
+			ProxyURL:   proxyURL,
+			Attributes: attrs,
+			CreatedAt:  ctx.Now,
+			UpdatedAt:  ctx.Now,
+		})
 	}
 	return out
 }

@@ -118,6 +118,12 @@ type Service struct {
 	homeDrainBound               time.Duration
 	homeCancel                   context.CancelFunc
 	runCancel                    context.CancelFunc
+	glmQuotaMu                   sync.Mutex
+	glmResolveEndpoints          glmEndpointResolver
+	glmHTTPClient                glmHTTPClientFactory
+	glmQuotaSnapshots            map[string]glmQuotaSnapshot
+	glmQuotaCancel               context.CancelFunc
+	glmQuotaDone                 chan struct{}
 	homeLogForwarder             homeLogForwarder
 	homeLogForwarderClient       *home.Client
 	homePluginSyncMu             sync.Mutex

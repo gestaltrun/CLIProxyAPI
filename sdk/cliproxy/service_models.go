@@ -2,11 +2,17 @@ package cliproxy
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/constant"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/glm"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/modelconfig"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
@@ -143,6 +149,9 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 		models = applyExcludedModels(models, excluded)
 	case "kimi":
 		models = registry.GetKimiModels()
+		models = applyExcludedModels(models, excluded)
+	case glm.Provider:
+		models, _ = s.fetchGLMModelsForAuth(ctx, a)
 		models = applyExcludedModels(models, excluded)
 	case "xai":
 		models = registry.GetXAIModels()
@@ -345,6 +354,74 @@ func (s *Service) latestAuthForModelRegistration(authID string) (*coreauth.Auth,
 		return nil, false
 	}
 	return auth, true
+}
+
+const glmModelsMaxBodyBytes int64 = 1 << 20
+
+func (s *Service) fetchGLMModelsForAuth(ctx context.Context, auth *coreauth.Auth) ([]*ModelInfo, error) {
+	if auth == nil || auth.Attributes == nil {
+		return nil, fmt.Errorf("GLM model discovery requires auth attributes")
+	}
+	apiKey := strings.TrimSpace(auth.Attributes["api_key"])
+	if apiKey == "" {
+		return nil, fmt.Errorf("GLM model discovery requires an API key")
+	}
+	endpoints, errEndpoints := s.resolveGLMEndpoints(auth.Attributes["glm_site"])
+	if errEndpoints != nil {
+		return nil, errEndpoints
+	}
+	req, errRequest := http.NewRequestWithContext(ctx, http.MethodGet, endpoints.ModelsURL, nil)
+	if errRequest != nil {
+		return nil, fmt.Errorf("build GLM models request: %w", errRequest)
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	client := s.newGLMHTTPClient(ctx, auth, 30*time.Second)
+	resp, errDo := client.Do(req)
+	if errDo != nil {
+		return nil, fmt.Errorf("request GLM models: %w", errDo)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, errRead := io.ReadAll(io.LimitReader(resp.Body, glmModelsMaxBodyBytes+1))
+	if errRead != nil {
+		return nil, fmt.Errorf("read GLM models response: %w", errRead)
+	}
+	if int64(len(body)) > glmModelsMaxBodyBytes {
+		return nil, fmt.Errorf("GLM models response exceeds %d bytes", glmModelsMaxBodyBytes)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("GLM models request returned HTTP %d", resp.StatusCode)
+	}
+	var envelope struct {
+		Data []struct {
+			ID          string `json:"id"`
+			DisplayName string `json:"display_name"`
+		} `json:"data"`
+	}
+	if errDecode := json.Unmarshal(body, &envelope); errDecode != nil {
+		return nil, fmt.Errorf("decode GLM models response: %w", errDecode)
+	}
+	byID := make(map[string]*ModelInfo, len(envelope.Data))
+	for _, item := range envelope.Data {
+		id := strings.TrimSpace(item.ID)
+		if id == "" {
+			continue
+		}
+		byID[id] = &ModelInfo{ID: id, Object: "model", Type: glm.Provider, OwnedBy: "zhipu", DisplayName: strings.TrimSpace(item.DisplayName), UserDefined: true}
+	}
+	if len(byID) == 0 {
+		return nil, fmt.Errorf("GLM models response contained no models")
+	}
+	ids := make([]string, 0, len(byID))
+	for id := range byID {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	models := make([]*ModelInfo, 0, len(ids))
+	for _, id := range ids {
+		models = append(models, byID[id])
+	}
+	return models, nil
 }
 
 func configEntryForAuthIndex[T any](auth *coreauth.Auth, entries []T) *T {

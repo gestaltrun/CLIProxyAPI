@@ -145,6 +145,9 @@ type Config struct {
 	// the auth/OAuth token file). Default false preserves the per-client "auto" behavior.
 	DisableClaudeCloakMode bool `yaml:"disable-claude-cloak-mode" json:"disable-claude-cloak-mode"`
 
+	// GLMCodingPlan defines first-class GLM Coding Plan API key credentials.
+	GLMCodingPlan []GLMCodingPlanKey `yaml:"glm-coding-plan" json:"glm-coding-plan"`
+
 	// OpenAICompatibility defines OpenAI API compatibility configurations for external providers.
 	OpenAICompatibility []OpenAICompatibility `yaml:"openai-compatibility" json:"openai-compatibility"`
 
