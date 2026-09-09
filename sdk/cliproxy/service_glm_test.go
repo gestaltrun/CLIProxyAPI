@@ -38,6 +38,32 @@ func TestFetchGLMModelsForAuthUsesBearerAndDynamicCatalog(t *testing.T) {
 	}
 }
 
+func TestStartStopGLMQuotaPollingCancelsWorker(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	_, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: "glm-a", Provider: glm.Provider, Status: coreauth.StatusActive, Attributes: map[string]string{"api_key": "secret", "glm_site": glm.SiteCN}})
+	if errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	entered := make(chan struct{})
+	service := &Service{
+		coreManager: manager,
+		glmResolveEndpoints: func(string) (glm.Endpoints, error) {
+			return glm.Endpoints{QuotaURL: "https://fixture.invalid/quota"}, nil
+		},
+		glmHTTPClient: func(context.Context, *coreauth.Auth, time.Duration) *http.Client { return &http.Client{} },
+		glmQuotaProbe: func(ctx context.Context, _ *http.Client, _ glm.Endpoints, _, _, _ string, previous glm.QuotaSnapshot, _ time.Time) glm.QuotaSnapshot {
+			close(entered)
+			<-ctx.Done()
+			return previous
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	service.startGLMQuotaPolling(ctx)
+	<-entered
+	cancel()
+	service.stopGLMQuotaPolling()
+}
+
 func TestGLMQuotaSignalsExposeStaleSnapshotWithoutSecrets(t *testing.T) {
 	signals := glmQuotaSignals(glm.QuotaSnapshot{
 		Status:           "stale",

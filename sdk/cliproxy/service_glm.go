@@ -110,7 +110,11 @@ func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Aut
 	previous := s.glmQuotaSnapshots[auth.ID]
 	s.glmQuotaMu.Unlock()
 	client := s.newGLMHTTPClient(ctx, auth, 30*time.Second)
-	snapshot := glm.ProbeQuota(
+	probe := glm.ProbeQuota
+	if s.glmQuotaProbe != nil {
+		probe = s.glmQuotaProbe
+	}
+	snapshot := probe(
 		ctx,
 		client,
 		endpoints,

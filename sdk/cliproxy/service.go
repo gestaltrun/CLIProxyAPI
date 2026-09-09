@@ -5,10 +5,12 @@ package cliproxy
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/glm"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/homeplugins"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
@@ -121,6 +123,7 @@ type Service struct {
 	glmQuotaMu                   sync.Mutex
 	glmResolveEndpoints          glmEndpointResolver
 	glmHTTPClient                glmHTTPClientFactory
+	glmQuotaProbe                func(context.Context, *http.Client, glm.Endpoints, string, string, string, glm.QuotaSnapshot, time.Time) glm.QuotaSnapshot
 	glmQuotaSnapshots            map[string]glmQuotaSnapshot
 	glmQuotaCancel               context.CancelFunc
 	glmQuotaDone                 chan struct{}
