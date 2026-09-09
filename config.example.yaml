@@ -626,6 +626,7 @@ nonstream-keepalive-interval: 0
 #   beta-features: "multi_agent"
 
 # GLM Coding Plan API keys. These are static subscription keys, not OAuth or PayG credentials.
+# Management CRUD: GET/PUT/PATCH/DELETE /v0/management/glm-coding-plan. GET returns has-api-key only, never the key.
 # Models are discovered dynamically from the selected Coding Plan /models endpoint.
 # glm-coding-plan:
 #   - api-key: "your-coding-plan-key"
