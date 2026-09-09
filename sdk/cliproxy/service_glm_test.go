@@ -15,7 +15,7 @@ import (
 func TestFetchGLMModelsForAuthUsesBearerAndDynamicCatalog(t *testing.T) {
 	var request *http.Request
 	service := &Service{
-		glmResolveEndpoints: func(string) (glm.Endpoints, error) {
+		glmResolveEndpoints: func(string, string) (glm.Endpoints, error) {
 			return glm.Endpoints{ModelsURL: "https://fixture.invalid/models"}, nil
 		},
 		glmHTTPClient: func(context.Context, *coreauth.Auth, time.Duration) *http.Client {
@@ -38,6 +38,49 @@ func TestFetchGLMModelsForAuthUsesBearerAndDynamicCatalog(t *testing.T) {
 	}
 }
 
+func TestRefreshGLMQuotaCustomBaseDoesNotCreateHTTPClient(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: "glm-custom", Provider: glm.Provider, Status: coreauth.StatusActive, Attributes: map[string]string{
+		"api_key":  "secret",
+		"glm_site": glm.SiteCN,
+		"base_url": "https://proxy.example.com/api/coding/paas/v4",
+	}})
+	if errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	clientCalls := 0
+	service := &Service{
+		coreManager: manager,
+		glmHTTPClient: func(context.Context, *coreauth.Auth, time.Duration) *http.Client {
+			clientCalls++
+			return &http.Client{}
+		},
+	}
+	service.refreshGLMQuotaForAuth(context.Background(), auth)
+	if clientCalls != 0 {
+		t.Fatalf("HTTP client calls = %d, want 0 for custom base", clientCalls)
+	}
+}
+
+func TestFetchGLMModelsCustomBaseDoesNotCreateHTTPClient(t *testing.T) {
+	clientCalls := 0
+	service := &Service{glmHTTPClient: func(context.Context, *coreauth.Auth, time.Duration) *http.Client {
+		clientCalls++
+		return &http.Client{}
+	}}
+	auth := &coreauth.Auth{ID: "glm-custom", Provider: glm.Provider, Attributes: map[string]string{
+		"api_key":  "secret",
+		"glm_site": glm.SiteCN,
+		"base_url": "https://proxy.example.com/api/coding/paas/v4",
+	}}
+	if _, err := service.fetchGLMModelsForAuth(context.Background(), auth); err == nil {
+		t.Fatal("custom base model discovery succeeded")
+	}
+	if clientCalls != 0 {
+		t.Fatalf("HTTP client calls = %d, want 0 for custom base", clientCalls)
+	}
+}
+
 func TestStartStopGLMQuotaPollingCancelsWorker(t *testing.T) {
 	manager := coreauth.NewManager(nil, nil, nil)
 	_, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: "glm-a", Provider: glm.Provider, Status: coreauth.StatusActive, Attributes: map[string]string{"api_key": "secret", "glm_site": glm.SiteCN}})
@@ -47,7 +90,7 @@ func TestStartStopGLMQuotaPollingCancelsWorker(t *testing.T) {
 	entered := make(chan struct{})
 	service := &Service{
 		coreManager: manager,
-		glmResolveEndpoints: func(string) (glm.Endpoints, error) {
+		glmResolveEndpoints: func(string, string) (glm.Endpoints, error) {
 			return glm.Endpoints{QuotaURL: "https://fixture.invalid/quota"}, nil
 		},
 		glmHTTPClient: func(context.Context, *coreauth.Auth, time.Duration) *http.Client { return &http.Client{} },

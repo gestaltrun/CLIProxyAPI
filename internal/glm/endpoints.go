@@ -24,14 +24,49 @@ type Endpoints struct {
 
 // ResolveEndpoints returns the official endpoint set for a GLM Coding Plan site.
 func ResolveEndpoints(site string) (Endpoints, error) {
+	return ResolveEndpointsForBase(site, "")
+}
+
+// ResolveEndpointsForBase verifies that the selected inference base is the official
+// Coding Plan base for the selected site before deriving its quota endpoint.
+func ResolveEndpointsForBase(site, selectedBaseURL string) (Endpoints, error) {
+	var expected Endpoints
 	switch strings.ToLower(strings.TrimSpace(site)) {
 	case "", SiteCN:
-		return endpointsForBase("https://open.bigmodel.cn/api/coding/paas/v4", "https://open.bigmodel.cn/api/monitor/usage/quota/limit"), nil
+		expected = endpointsForBase("https://open.bigmodel.cn/api/coding/paas/v4", "https://open.bigmodel.cn/api/monitor/usage/quota/limit")
 	case SiteInternational:
-		return endpointsForBase("https://api.z.ai/api/coding/paas/v4", "https://api.z.ai/api/monitor/usage/quota/limit"), nil
+		expected = endpointsForBase("https://api.z.ai/api/coding/paas/v4", "https://api.z.ai/api/monitor/usage/quota/limit")
 	default:
 		return Endpoints{}, fmt.Errorf("unsupported GLM Coding Plan site %q", site)
 	}
+	selectedBaseURL = strings.TrimSpace(selectedBaseURL)
+	if selectedBaseURL == "" {
+		return expected, nil
+	}
+	selected, errSelected := normalizeCodingBaseURL(selectedBaseURL)
+	if errSelected != nil {
+		return Endpoints{}, errSelected
+	}
+	official, _ := normalizeCodingBaseURL(expected.CodingBaseURL)
+	if selected != official {
+		return Endpoints{}, fmt.Errorf("GLM quota observation is unsupported for non-official Coding Plan base %q", selectedBaseURL)
+	}
+	return expected, nil
+}
+
+func normalizeCodingBaseURL(raw string) (string, error) {
+	parsed, errParse := url.Parse(strings.TrimSpace(raw))
+	if errParse != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("invalid GLM Coding Plan base %q", raw)
+	}
+	if parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", fmt.Errorf("invalid GLM Coding Plan base %q", raw)
+	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	parsed.Host = strings.ToLower(parsed.Host)
+	parsed.Path = strings.TrimRight(parsed.EscapedPath(), "/")
+	parsed.RawPath = ""
+	return parsed.String(), nil
 }
 
 func endpointsForBase(codingBaseURL, quotaURL string) Endpoints {

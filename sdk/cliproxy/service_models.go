@@ -366,7 +366,7 @@ func (s *Service) fetchGLMModelsForAuth(ctx context.Context, auth *coreauth.Auth
 	if apiKey == "" {
 		return nil, fmt.Errorf("GLM model discovery requires an API key")
 	}
-	endpoints, errEndpoints := s.resolveGLMEndpoints(auth.Attributes["glm_site"])
+	endpoints, errEndpoints := s.resolveGLMEndpoints(auth.Attributes["glm_site"], auth.Attributes["base_url"])
 	if errEndpoints != nil {
 		return nil, errEndpoints
 	}
@@ -376,7 +376,7 @@ func (s *Service) fetchGLMModelsForAuth(ctx context.Context, auth *coreauth.Auth
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	client := s.newGLMHTTPClient(ctx, auth, 30*time.Second)
+	client := s.newGLMHTTPClient(ctx, auth, 0)
 	resp, errDo := client.Do(req)
 	if errDo != nil {
 		return nil, fmt.Errorf("request GLM models: %w", errDo)

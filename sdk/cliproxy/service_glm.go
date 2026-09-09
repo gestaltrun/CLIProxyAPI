@@ -17,14 +17,14 @@ const glmQuotaPollInterval = 10 * time.Minute
 
 type glmQuotaSnapshot = glm.QuotaSnapshot
 
-type glmEndpointResolver func(string) (glm.Endpoints, error)
+type glmEndpointResolver func(string, string) (glm.Endpoints, error)
 type glmHTTPClientFactory func(context.Context, *coreauth.Auth, time.Duration) *http.Client
 
-func (s *Service) resolveGLMEndpoints(site string) (glm.Endpoints, error) {
+func (s *Service) resolveGLMEndpoints(site, selectedBaseURL string) (glm.Endpoints, error) {
 	if s != nil && s.glmResolveEndpoints != nil {
-		return s.glmResolveEndpoints(site)
+		return s.glmResolveEndpoints(site, selectedBaseURL)
 	}
-	return glm.ResolveEndpoints(site)
+	return glm.ResolveEndpointsForBase(site, selectedBaseURL)
 }
 
 func (s *Service) newGLMHTTPClient(ctx context.Context, auth *coreauth.Auth, timeout time.Duration) *http.Client {
@@ -101,7 +101,7 @@ func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Aut
 	if auth == nil || auth.Attributes == nil {
 		return
 	}
-	endpoints, errEndpoints := s.resolveGLMEndpoints(auth.Attributes["glm_site"])
+	endpoints, errEndpoints := s.resolveGLMEndpoints(auth.Attributes["glm_site"], auth.Attributes["base_url"])
 	if errEndpoints != nil {
 		log.WithError(errEndpoints).Warn("GLM quota endpoint resolution failed")
 		return
@@ -109,7 +109,7 @@ func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Aut
 	s.glmQuotaMu.Lock()
 	previous := s.glmQuotaSnapshots[auth.ID]
 	s.glmQuotaMu.Unlock()
-	client := s.newGLMHTTPClient(ctx, auth, 30*time.Second)
+	client := s.newGLMHTTPClient(ctx, auth, 0)
 	probe := glm.ProbeQuota
 	if s.glmQuotaProbe != nil {
 		probe = s.glmQuotaProbe

@@ -29,6 +29,26 @@ func TestResolveEndpoints(t *testing.T) {
 	}
 }
 
+func TestResolveEndpointsForBaseRejectsCustomAndMismatchedBases(t *testing.T) {
+	accepted, errAccepted := ResolveEndpointsForBase(SiteCN, "HTTPS://OPEN.BIGMODEL.CN/api/coding/paas/v4/")
+	if errAccepted != nil || accepted.QuotaURL == "" {
+		t.Fatalf("official normalized base rejected: endpoints=%#v err=%v", accepted, errAccepted)
+	}
+	for _, test := range []struct {
+		site string
+		base string
+	}{
+		{site: SiteCN, base: "https://proxy.example.com/api/coding/paas/v4"},
+		{site: SiteCN, base: "https://api.z.ai/api/coding/paas/v4"},
+		{site: SiteInternational, base: "https://api.z.ai/v1"},
+		{site: SiteInternational, base: "https://api.z.ai/api/coding/paas/v4?target=other"},
+	} {
+		if _, err := ResolveEndpointsForBase(test.site, test.base); err == nil {
+			t.Fatalf("ResolveEndpointsForBase(%q, %q) accepted unsupported base", test.site, test.base)
+		}
+	}
+}
+
 func TestBuildQuotaRequestUsesRawAuthorization(t *testing.T) {
 	endpoints, _ := ResolveEndpoints(SiteCN)
 	req, err := BuildQuotaRequest(context.Background(), endpoints, "secret", "org", "project")
