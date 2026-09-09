@@ -207,24 +207,44 @@ func TestGLMQuotaObservationPreservesConcurrentAuthConfiguration(t *testing.T) {
 	}
 }
 
-func TestApplyGLMQuotaAvailabilityUsesOnlyCredentialFailureAndActualExhaustion(t *testing.T) {
-	now := time.Unix(100, 0)
-	auth := &coreauth.Auth{Status: coreauth.StatusActive}
-	applyGLMQuotaAvailability(auth, glm.QuotaSnapshot{Status: "ready", CredentialValid: true, ObservedAt: now, Windows: []glm.QuotaWindow{{Window: glm.WindowFiveHour, UsedPercent: 99.9, ResetAt: now.Add(time.Hour)}}})
-	if auth.Unavailable {
-		t.Fatal("sub-100 utilization blocked auth")
-	}
-	applyGLMQuotaAvailability(auth, glm.QuotaSnapshot{Status: "ready", CredentialValid: true, ObservedAt: now, Windows: []glm.QuotaWindow{{Window: glm.WindowFiveHour, UsedPercent: 100, ResetAt: now.Add(time.Hour)}}})
-	if !auth.Unavailable || !auth.NextRetryAfter.Equal(now.Add(time.Hour)) {
-		t.Fatalf("exhausted auth = %#v", auth)
-	}
-	applyGLMQuotaAvailability(auth, glm.QuotaSnapshot{Status: "ready", CredentialValid: true, ObservedAt: now.Add(2 * time.Hour)})
-	if auth.Unavailable || auth.Status != coreauth.StatusActive {
-		t.Fatalf("recovered auth = %#v", auth)
-	}
-	applyGLMQuotaAvailability(auth, glm.QuotaSnapshot{Status: "stale", CredentialValid: false, ObservedAt: now})
-	if !auth.Unavailable || auth.Status != coreauth.StatusError || !auth.NextRetryAfter.IsZero() {
-		t.Fatalf("rejected auth = %#v", auth)
+func TestGLMQuotaObservationDoesNotChangeInferenceEligibility(t *testing.T) {
+	for _, snapshot := range []glm.QuotaSnapshot{
+		{Status: "stale", CredentialValid: false, ObservedAt: time.Unix(100, 0), Error: "usage endpoint rejected key"},
+		{Status: "ready", CredentialValid: true, ObservedAt: time.Unix(100, 0), Windows: []glm.QuotaWindow{{Window: glm.WindowFiveHour, UsedPercent: 100, ResetAt: time.Unix(200, 0)}}},
+	} {
+		manager := coreauth.NewManager(nil, nil, nil)
+		auth, errRegister := manager.Register(context.Background(), &coreauth.Auth{
+			ID:             "glm-observation-only",
+			Provider:       glm.Provider,
+			Status:         coreauth.StatusError,
+			StatusMessage:  "inference cooldown",
+			Unavailable:    true,
+			NextRetryAfter: time.Unix(300, 0),
+			Quota: coreauth.QuotaState{
+				Exceeded:      true,
+				Reason:        "credential_quota",
+				NextRecoverAt: time.Unix(300, 0),
+			},
+			Attributes: map[string]string{"api_key": "secret", "glm_site": glm.SiteCN, "base_url": "https://open.bigmodel.cn/api/coding/paas/v4"},
+		})
+		if errRegister != nil {
+			t.Fatal(errRegister)
+		}
+		service := &Service{
+			coreManager:   manager,
+			glmHTTPClient: func(context.Context, *coreauth.Auth, time.Duration) *http.Client { return &http.Client{} },
+			glmQuotaProbe: func(context.Context, *http.Client, glm.Endpoints, string, string, string, glm.QuotaSnapshot, time.Time) glm.QuotaSnapshot {
+				return snapshot
+			},
+		}
+		service.refreshGLMQuotaForAuth(context.Background(), auth)
+		final, _ := manager.GetByID(auth.ID)
+		if !final.Unavailable || final.Status != coreauth.StatusError || final.StatusMessage != "inference cooldown" || !final.NextRetryAfter.Equal(time.Unix(300, 0)) || !final.Quota.Exceeded || final.Quota.Reason != "credential_quota" || !final.Quota.NextRecoverAt.Equal(time.Unix(300, 0)) {
+			t.Fatalf("usage observation changed inference eligibility: %#v", final)
+		}
+		if final.Quota.Signals["GLM-Quota-Status"] != snapshot.Status {
+			t.Fatalf("usage observation missing: %#v", final.Quota.Signals)
+		}
 	}
 }
 

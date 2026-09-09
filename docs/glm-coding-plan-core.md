@@ -19,7 +19,7 @@ The GLM module owns only provider-specific facts:
 - Dynamic model discovery for one auth.
 - GLM reasoning translation through the canonical thinking provider seam.
 - Coding Plan quota request construction, response parsing, snapshot freshness, and poll lifecycle.
-- Projection of quota availability into the existing auth manager.
+- Projection of quota and credential observation status into the existing management surface without changing inference eligibility.
 
 The existing OpenAI-compatible executor owns generic request translation, streaming, token counting, per-auth proxy selection, and HTTP execution. The existing auth manager and registry own credential selection, cooldown state, model registration, and retry orchestration.
 
@@ -78,6 +78,8 @@ The quota parser consumes `data.limits` entries:
 - `CREDIT_LIMIT` is a labeled fallback only when no token-limit entry exists.
 
 A successful snapshot records both windows when present, the plan level when present, observation time, and reset times. A 401 or 403 records invalid current credential observation without deleting the last successful snapshot; retained values are explicitly stale. Missing or malformed windows do not become zero usage.
+
+Quota polling is observation-only. Usage-endpoint authentication and quota percentage do not modify `Auth.Unavailable`, `Quota.Exceeded`, cooldown deadlines, or inference status. The inference response path and existing scheduler remain the only authorities for request eligibility because a key may be allowed to infer while lacking permission to read the usage endpoint. The management API exposes observation status, credential observation, freshness, and retained stale values for diagnosis.
 
 The poller coalesces concurrent refreshes for one auth, follows the service lifecycle, and stops all timers and workers on cancellation. Quota polling is separate from credential refresh because the Coding Plan API key is static.
 

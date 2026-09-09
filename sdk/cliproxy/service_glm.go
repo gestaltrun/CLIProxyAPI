@@ -142,47 +142,8 @@ func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Aut
 	if _, errUpdate := s.coreManager.UpdateRuntimeObservation(coreauth.WithSkipPersist(ctx), auth.ID, func(updated *coreauth.Auth) {
 		updated.Quota.ObservedAt = snapshot.ObservedAt
 		updated.Quota.Signals = glmQuotaSignals(snapshot)
-		applyGLMQuotaAvailability(updated, snapshot)
 	}); errUpdate != nil {
 		log.WithError(errUpdate).Warn("GLM quota observation update failed")
-	}
-}
-
-func applyGLMQuotaAvailability(auth *coreauth.Auth, snapshot glmQuotaSnapshot) {
-	if auth == nil || auth.Disabled || auth.Status == coreauth.StatusDisabled {
-		return
-	}
-	if snapshot.Status == "stale" && !snapshot.CredentialValid {
-		auth.Status = coreauth.StatusError
-		auth.StatusMessage = "GLM Coding Plan credential rejected by quota endpoint"
-		auth.Unavailable = true
-		auth.NextRetryAfter = time.Time{}
-		return
-	}
-	if snapshot.Status != "ready" {
-		return
-	}
-	exhaustedUntil := time.Time{}
-	for _, window := range snapshot.Windows {
-		if window.UsedPercent < 100 || !window.ResetAt.After(snapshot.ObservedAt) {
-			continue
-		}
-		if exhaustedUntil.IsZero() || window.ResetAt.After(exhaustedUntil) {
-			exhaustedUntil = window.ResetAt
-		}
-	}
-	if !exhaustedUntil.IsZero() {
-		auth.Status = coreauth.StatusError
-		auth.StatusMessage = "GLM Coding Plan quota exhausted"
-		auth.Unavailable = true
-		auth.NextRetryAfter = exhaustedUntil
-		return
-	}
-	if strings.HasPrefix(auth.StatusMessage, "GLM Coding Plan ") {
-		auth.Status = coreauth.StatusActive
-		auth.StatusMessage = ""
-		auth.Unavailable = false
-		auth.NextRetryAfter = time.Time{}
 	}
 }
 
