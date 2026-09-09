@@ -146,6 +146,34 @@ func (m *Manager) Update(ctx context.Context, auth *Auth) (*Auth, error) {
 	return m.updateInternal(ctx, nil, auth, updateModeReplace)
 }
 
+// UpdateRuntimeObservation atomically applies provider-owned passive state to the
+// latest auth snapshot without replacing concurrent configuration changes.
+func (m *Manager) UpdateRuntimeObservation(ctx context.Context, authID string, apply func(*Auth)) (*Auth, error) {
+	if m == nil || strings.TrimSpace(authID) == "" || apply == nil {
+		return nil, nil
+	}
+	m.mu.Lock()
+	current := m.auths[authID]
+	if current == nil {
+		m.mu.Unlock()
+		return nil, nil
+	}
+	updated := current.Clone()
+	apply(updated)
+	updated.Generation = current.Generation + 1
+	updated.UpdatedAt = time.Now()
+	updated.EnsureIndex()
+	stored := updated.Clone()
+	m.auths[authID] = stored
+	m.mu.Unlock()
+	if m.scheduler != nil {
+		m.scheduler.upsertAuth(stored.Clone())
+	}
+	_ = m.persist(ctx, stored)
+	m.hook.OnAuthUpdated(ctx, stored.Clone())
+	return stored.Clone(), nil
+}
+
 func (m *Manager) updateInternal(ctx context.Context, base, auth *Auth, mode updateAuthMode) (*Auth, error) {
 	if auth == nil || auth.ID == "" {
 		return nil, nil

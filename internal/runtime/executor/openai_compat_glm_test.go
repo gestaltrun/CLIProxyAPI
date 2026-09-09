@@ -13,6 +13,27 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestOpenAICompatGLMTranslatesAnthropicRequestThroughExistingTranslator(t *testing.T) {
+	var body []byte
+	transport := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		body, _ = io.ReadAll(req.Body)
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"id":"chatcmpl-test","object":"chat.completion","model":"glm-5.3","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))}, nil
+	})
+	ctx := context.WithValue(context.Background(), "cliproxy.roundtripper", http.RoundTripper(transport))
+	executor := NewOpenAICompatExecutor("glm", nil)
+	_, err := executor.Execute(ctx, &cliproxyauth.Auth{Provider: "glm", Attributes: map[string]string{"base_url": "https://open.bigmodel.cn/api/coding/paas/v4", "api_key": "secret"}}, cliproxyexecutor.Request{
+		Model:   "glm-5.3",
+		Payload: []byte(`{"model":"glm-5.3","max_tokens":128,"messages":[{"role":"user","content":"hi"}],"thinking":{"type":"enabled","budget_tokens":1024}}`),
+		Format:  sdktranslator.FromString("claude"),
+	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FromString("claude")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gjson.GetBytes(body, "messages.0.role").String() != "user" || gjson.GetBytes(body, "reasoning_effort").String() != "low" {
+		t.Fatalf("translated body = %s", body)
+	}
+}
+
 func TestOpenAICompatGLMUsesCodingEndpointBearerAndEffort(t *testing.T) {
 	var captured *http.Request
 	var body []byte

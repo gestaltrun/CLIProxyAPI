@@ -151,7 +151,9 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 		models = registry.GetKimiModels()
 		models = applyExcludedModels(models, excluded)
 	case glm.Provider:
-		models, _ = s.fetchGLMModelsForAuth(ctx, a)
+		var errModels error
+		models, errModels = s.fetchGLMModelsForAuth(ctx, a)
+		s.recordGLMModelDiscovery(ctx, a.ID, errModels)
 		models = applyExcludedModels(models, excluded)
 	case "xai":
 		models = registry.GetXAIModels()
@@ -422,6 +424,38 @@ func (s *Service) fetchGLMModelsForAuth(ctx context.Context, auth *coreauth.Auth
 		models = append(models, byID[id])
 	}
 	return models, nil
+}
+
+func (s *Service) recordGLMModelDiscovery(ctx context.Context, authID string, errDiscovery error) {
+	if s == nil || s.coreManager == nil || strings.TrimSpace(authID) == "" {
+		return
+	}
+	_, _ = s.coreManager.UpdateRuntimeObservation(coreauth.WithSkipPersist(ctx), authID, func(auth *coreauth.Auth) {
+		if auth.Metadata == nil {
+			auth.Metadata = make(map[string]any)
+		}
+		if errDiscovery == nil {
+			delete(auth.Metadata, "glm_models_error")
+			auth.Metadata["glm_models_status"] = "ready"
+			return
+		}
+		auth.Metadata["glm_models_status"] = "error"
+		auth.Metadata["glm_models_error"] = classifyGLMModelDiscoveryError(errDiscovery)
+	})
+}
+
+func classifyGLMModelDiscoveryError(errDiscovery error) string {
+	message := strings.ToLower(strings.TrimSpace(errDiscovery.Error()))
+	switch {
+	case strings.Contains(message, "requires auth"), strings.Contains(message, "unsupported"), strings.Contains(message, "invalid glm"):
+		return "configuration"
+	case strings.Contains(message, "http 401"), strings.Contains(message, "http 403"):
+		return "authentication"
+	case strings.Contains(message, "contained no models"), strings.Contains(message, "decode"), strings.Contains(message, "exceeds"):
+		return "invalid_response"
+	default:
+		return "upstream"
+	}
 }
 
 func configEntryForAuthIndex[T any](auth *coreauth.Auth, entries []T) *T {

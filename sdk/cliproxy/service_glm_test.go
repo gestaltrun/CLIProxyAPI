@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -81,6 +82,60 @@ func TestFetchGLMModelsCustomBaseDoesNotCreateHTTPClient(t *testing.T) {
 	}
 }
 
+func TestConcurrentGLMQuotaRefreshesCoalesceByAuth(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: "glm-coalesce", Provider: glm.Provider, Status: coreauth.StatusActive, Attributes: map[string]string{
+		"api_key":  "secret",
+		"glm_site": glm.SiteCN,
+		"base_url": "https://open.bigmodel.cn/api/coding/paas/v4",
+	}})
+	if errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	entered := make(chan struct{})
+	secondAtFlight := make(chan struct{})
+	release := make(chan struct{})
+	flightEntries := 0
+	var flightMu sync.Mutex
+	calls := 0
+	var callsMu sync.Mutex
+	service := &Service{
+		coreManager: manager,
+		glmQuotaBeforeFlight: func(string) {
+			flightMu.Lock()
+			flightEntries++
+			if flightEntries == 2 {
+				close(secondAtFlight)
+			}
+			flightMu.Unlock()
+		},
+		glmHTTPClient: func(context.Context, *coreauth.Auth, time.Duration) *http.Client { return &http.Client{} },
+		glmQuotaProbe: func(_ context.Context, _ *http.Client, _ glm.Endpoints, _, _, _ string, _ glm.QuotaSnapshot, now time.Time) glm.QuotaSnapshot {
+			callsMu.Lock()
+			calls++
+			if calls == 1 {
+				close(entered)
+			}
+			callsMu.Unlock()
+			<-release
+			return glm.QuotaSnapshot{Status: "ready", CredentialValid: true, ObservedAt: now}
+		},
+	}
+	done := make(chan struct{}, 2)
+	go func() { service.refreshGLMQuotaForAuth(context.Background(), auth); done <- struct{}{} }()
+	<-entered
+	go func() { service.refreshGLMQuotaForAuth(context.Background(), auth); done <- struct{}{} }()
+	<-secondAtFlight
+	close(release)
+	<-done
+	<-done
+	callsMu.Lock()
+	defer callsMu.Unlock()
+	if calls != 1 {
+		t.Fatalf("quota probe calls = %d, want 1", calls)
+	}
+}
+
 func TestStartStopGLMQuotaPollingCancelsWorker(t *testing.T) {
 	manager := coreauth.NewManager(nil, nil, nil)
 	_, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: "glm-a", Provider: glm.Provider, Status: coreauth.StatusActive, Attributes: map[string]string{"api_key": "secret", "glm_site": glm.SiteCN}})
@@ -105,6 +160,72 @@ func TestStartStopGLMQuotaPollingCancelsWorker(t *testing.T) {
 	<-entered
 	cancel()
 	service.stopGLMQuotaPolling()
+}
+
+func TestGLMQuotaObservationPreservesConcurrentAuthConfiguration(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	registered, errRegister := manager.Register(context.Background(), &coreauth.Auth{ID: "glm-race", Provider: glm.Provider, Status: coreauth.StatusActive, Attributes: map[string]string{
+		"api_key":          "secret",
+		"glm_site":         glm.SiteCN,
+		"base_url":         "https://open.bigmodel.cn/api/coding/paas/v4",
+		"glm_organization": "old-org",
+	}})
+	if errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	service := &Service{
+		coreManager:   manager,
+		glmHTTPClient: func(context.Context, *coreauth.Auth, time.Duration) *http.Client { return &http.Client{} },
+		glmQuotaProbe: func(_ context.Context, _ *http.Client, _ glm.Endpoints, _, _, _ string, _ glm.QuotaSnapshot, now time.Time) glm.QuotaSnapshot {
+			close(entered)
+			<-release
+			return glm.QuotaSnapshot{Status: "ready", CredentialValid: true, ObservedAt: now, LastSuccessfulAt: now}
+		},
+	}
+	done := make(chan struct{})
+	go func() {
+		service.refreshGLMQuotaForAuth(context.Background(), registered)
+		close(done)
+	}()
+	<-entered
+	latest, _ := manager.GetByID(registered.ID)
+	latest.Attributes["glm_organization"] = "new-org"
+	latest.Attributes[coreauth.AttributeWeight] = "9"
+	if _, errUpdate := manager.Update(context.Background(), latest); errUpdate != nil {
+		t.Fatal(errUpdate)
+	}
+	close(release)
+	<-done
+	final, _ := manager.GetByID(registered.ID)
+	if final.Attributes["glm_organization"] != "new-org" || final.Attributes[coreauth.AttributeWeight] != "9" {
+		t.Fatalf("concurrent attributes overwritten: %#v", final.Attributes)
+	}
+	if final.Quota.Signals["GLM-Quota-Status"] != "ready" {
+		t.Fatalf("quota signals missing: %#v", final.Quota.Signals)
+	}
+}
+
+func TestApplyGLMQuotaAvailabilityUsesOnlyCredentialFailureAndActualExhaustion(t *testing.T) {
+	now := time.Unix(100, 0)
+	auth := &coreauth.Auth{Status: coreauth.StatusActive}
+	applyGLMQuotaAvailability(auth, glm.QuotaSnapshot{Status: "ready", CredentialValid: true, ObservedAt: now, Windows: []glm.QuotaWindow{{Window: glm.WindowFiveHour, UsedPercent: 99.9, ResetAt: now.Add(time.Hour)}}})
+	if auth.Unavailable {
+		t.Fatal("sub-100 utilization blocked auth")
+	}
+	applyGLMQuotaAvailability(auth, glm.QuotaSnapshot{Status: "ready", CredentialValid: true, ObservedAt: now, Windows: []glm.QuotaWindow{{Window: glm.WindowFiveHour, UsedPercent: 100, ResetAt: now.Add(time.Hour)}}})
+	if !auth.Unavailable || !auth.NextRetryAfter.Equal(now.Add(time.Hour)) {
+		t.Fatalf("exhausted auth = %#v", auth)
+	}
+	applyGLMQuotaAvailability(auth, glm.QuotaSnapshot{Status: "ready", CredentialValid: true, ObservedAt: now.Add(2 * time.Hour)})
+	if auth.Unavailable || auth.Status != coreauth.StatusActive {
+		t.Fatalf("recovered auth = %#v", auth)
+	}
+	applyGLMQuotaAvailability(auth, glm.QuotaSnapshot{Status: "stale", CredentialValid: false, ObservedAt: now})
+	if !auth.Unavailable || auth.Status != coreauth.StatusError || !auth.NextRetryAfter.IsZero() {
+		t.Fatalf("rejected auth = %#v", auth)
+	}
 }
 
 func TestGLMQuotaSignalsExposeStaleSnapshotWithoutSecrets(t *testing.T) {
