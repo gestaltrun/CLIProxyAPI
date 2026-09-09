@@ -1,6 +1,8 @@
 # GLM Coding Plan core provider
 
-Tracking issue: [gestaltrun/CLIProxyAPI#1](https://github.com/gestaltrun/CLIProxyAPI/issues/1)
+Core implementation issue: [gestaltrun/CLIProxyAPI#1](https://github.com/gestaltrun/CLIProxyAPI/issues/1)
+
+Product delivery coordination: [gestaltrun/deepseek-harness-gestalt#649](https://github.com/gestaltrun/deepseek-harness-gestalt/issues/649). The core pull request closes only the core repository issue. The product repository tracks integration separately and will pin the reviewed core commit when it updates its gitlink.
 
 ## Decision
 
