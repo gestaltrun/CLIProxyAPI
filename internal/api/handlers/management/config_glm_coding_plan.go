@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 )
 
 type glmCodingPlanView struct {
@@ -33,7 +34,7 @@ func glmCodingPlanViews(entries []config.GLMCodingPlanKey) []glmCodingPlanView {
 			Priority:     entry.Priority,
 			Weight:       entry.Weight,
 			Prefix:       entry.Prefix,
-			ProxyURL:     entry.ProxyURL,
+			ProxyURL:     proxyutil.Redact(entry.ProxyURL),
 			Organization: entry.Organization,
 			Project:      entry.Project,
 		})

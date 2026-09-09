@@ -13,12 +13,12 @@ import (
 )
 
 func TestGetGLMCodingPlanRedactsAPIKey(t *testing.T) {
-	h := NewHandlerWithoutConfigFilePath(&config.Config{GLMCodingPlan: []config.GLMCodingPlanKey{{APIKey: "secret-key", Site: "cn", Organization: "team"}}}, nil)
+	h := NewHandlerWithoutConfigFilePath(&config.Config{GLMCodingPlan: []config.GLMCodingPlanKey{{APIKey: "secret-key", Site: "cn", Organization: "team", ProxyURL: "http://proxy-user:proxy-password@proxy.example.com:8080/private"}}}, nil)
 	recorder := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(recorder)
 	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/glm-coding-plan", nil)
 	h.GetGLMCodingPlan(ctx)
-	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "secret-key") || strings.Contains(recorder.Body.String(), `"api-key":`) {
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "secret-key") || strings.Contains(recorder.Body.String(), `"api-key":`) || strings.Contains(recorder.Body.String(), "proxy-user") || strings.Contains(recorder.Body.String(), "proxy-password") || strings.Contains(recorder.Body.String(), "/private") {
 		t.Fatalf("response leaks secret: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 	var body struct {
@@ -26,6 +26,9 @@ func TestGetGLMCodingPlanRedactsAPIKey(t *testing.T) {
 	}
 	if errDecode := json.Unmarshal(recorder.Body.Bytes(), &body); errDecode != nil || len(body.Entries) != 1 || !body.Entries[0].HasAPIKey {
 		t.Fatalf("response = %s err=%v", recorder.Body.String(), errDecode)
+	}
+	if body.Entries[0].ProxyURL != "http://redacted@proxy.example.com:8080" {
+		t.Fatalf("proxy URL = %q", body.Entries[0].ProxyURL)
 	}
 }
 
