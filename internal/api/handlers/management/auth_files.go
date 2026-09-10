@@ -434,6 +434,14 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth) gin.H {
 	if requestRetry, ok := auth.RequestRetryOverride(); ok {
 		entry["request_retry"] = requestRetry
 	}
+	if strings.EqualFold(strings.TrimSpace(auth.Provider), "glm") && auth.Metadata != nil {
+		if status, okStatus := auth.Metadata["glm_models_status"].(string); okStatus && strings.TrimSpace(status) != "" {
+			entry["models_status"] = status
+		}
+		if category, okCategory := auth.Metadata["glm_models_error"].(string); okCategory && strings.TrimSpace(category) != "" {
+			entry["models_error"] = category
+		}
+	}
 	return entry
 }
 

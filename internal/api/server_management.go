@@ -83,6 +83,11 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.GET("/api-key-usage", s.mgmt.GetAPIKeyUsage)
 		mgmt.GET("/usage-queue", s.mgmt.GetUsageQueue)
 
+		mgmt.GET("/glm-coding-plan", s.mgmt.GetGLMCodingPlan)
+		mgmt.PUT("/glm-coding-plan", s.mgmt.PutGLMCodingPlan)
+		mgmt.PATCH("/glm-coding-plan", s.mgmt.PatchGLMCodingPlan)
+		mgmt.DELETE("/glm-coding-plan", s.mgmt.DeleteGLMCodingPlan)
+
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
 		mgmt.PUT("/gemini-api-key", s.mgmt.PutGeminiKeys)
 		mgmt.PATCH("/gemini-api-key", s.mgmt.PatchGeminiKey)

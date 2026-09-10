@@ -198,6 +198,7 @@ func (s *Service) Run(ctx context.Context) error {
 	}
 
 	s.registerModelRefreshCallback()
+	s.startGLMQuotaPolling(ctx)
 
 	// Prefer core auth manager auto refresh if available.
 	if s.coreManager != nil && !homeEnabled {
@@ -279,6 +280,8 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			homeForwarder.Stop()
 		}
 		s.homeLifecycleMu.Unlock()
+
+		s.stopGLMQuotaPolling()
 
 		// legacy refresh loop removed; only stopping core auth manager below
 

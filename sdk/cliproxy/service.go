@@ -5,10 +5,12 @@ package cliproxy
 
 import (
 	"context"
+	"net/http"
 	"sync"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/api"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/glm"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/home"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/homeplugins"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/pluginhost"
@@ -20,6 +22,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executionregistry"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
 	sdkpluginstore "github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginstore"
+	"golang.org/x/sync/singleflight"
 )
 
 // Service wraps the proxy server lifecycle so external programs can embed the CLI proxy.
@@ -118,6 +121,15 @@ type Service struct {
 	homeDrainBound               time.Duration
 	homeCancel                   context.CancelFunc
 	runCancel                    context.CancelFunc
+	glmQuotaMu                   sync.Mutex
+	glmQuotaFlight               singleflight.Group
+	glmResolveEndpoints          glmEndpointResolver
+	glmHTTPClient                glmHTTPClientFactory
+	glmQuotaProbe                func(context.Context, *http.Client, glm.Endpoints, string, string, string, glm.QuotaSnapshot, time.Time) glm.QuotaSnapshot
+	glmQuotaBeforeFlight         func(string)
+	glmQuotaSnapshots            map[string]glmQuotaSnapshot
+	glmQuotaCancel               context.CancelFunc
+	glmQuotaDone                 chan struct{}
 	homeLogForwarder             homeLogForwarder
 	homeLogForwarderClient       *home.Client
 	homePluginSyncMu             sync.Mutex
