@@ -2,6 +2,7 @@ package management
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -55,12 +56,25 @@ func TestPutPatchDeleteGLMCodingPlan(t *testing.T) {
 		t.Fatalf("PATCH status=%d body=%s cfg=%#v", patchRecorder.Code, patchRecorder.Body.String(), h.cfg.GLMCodingPlan)
 	}
 
-	deleteRecorder := httptest.NewRecorder()
-	deleteCtx, _ := gin.CreateTestContext(deleteRecorder)
-	deleteCtx.Request = httptest.NewRequest(http.MethodDelete, "/v0/management/glm-coding-plan?index=0", nil)
-	h.DeleteGLMCodingPlan(deleteCtx)
-	if deleteRecorder.Code != http.StatusOK || len(h.cfg.GLMCodingPlan) != 0 {
-		t.Fatalf("DELETE status=%d body=%s cfg=%#v", deleteRecorder.Code, deleteRecorder.Body.String(), h.cfg.GLMCodingPlan)
+	appendRecorder := httptest.NewRecorder()
+	appendCtx, _ := gin.CreateTestContext(appendRecorder)
+	appendCtx.Request = httptest.NewRequest(http.MethodPatch, "/v0/management/glm-coding-plan", strings.NewReader(`{"index":1,"value":{"api-key":"second","site":"cn"}}`))
+	h.PatchGLMCodingPlan(appendCtx)
+	if appendRecorder.Code != http.StatusOK || len(h.cfg.GLMCodingPlan) != 2 || h.cfg.GLMCodingPlan[0].APIKey != "secret" || h.cfg.GLMCodingPlan[1].APIKey != "second" {
+		t.Fatalf("PATCH append status=%d body=%s cfg=%#v", appendRecorder.Code, appendRecorder.Body.String(), h.cfg.GLMCodingPlan)
+	}
+
+	for _, index := range []int{1, 0} {
+		deleteRecorder := httptest.NewRecorder()
+		deleteCtx, _ := gin.CreateTestContext(deleteRecorder)
+		deleteCtx.Request = httptest.NewRequest(http.MethodDelete, fmt.Sprintf("/v0/management/glm-coding-plan?index=%d", index), nil)
+		h.DeleteGLMCodingPlan(deleteCtx)
+		if deleteRecorder.Code != http.StatusOK {
+			t.Fatalf("DELETE index=%d status=%d body=%s cfg=%#v", index, deleteRecorder.Code, deleteRecorder.Body.String(), h.cfg.GLMCodingPlan)
+		}
+	}
+	if len(h.cfg.GLMCodingPlan) != 0 {
+		t.Fatalf("DELETE leftover cfg=%#v", h.cfg.GLMCodingPlan)
 	}
 }
 

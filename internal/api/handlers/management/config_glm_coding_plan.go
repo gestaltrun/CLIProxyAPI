@@ -105,11 +105,15 @@ func (h *Handler) PatchGLMCodingPlan(c *gin.Context) {
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if *body.Index < 0 || *body.Index >= len(h.cfg.GLMCodingPlan) {
+	if *body.Index < 0 || *body.Index > len(h.cfg.GLMCodingPlan) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "item not found"})
 		return
 	}
-	entry := h.cfg.GLMCodingPlan[*body.Index]
+	appending := *body.Index == len(h.cfg.GLMCodingPlan)
+	entry := config.GLMCodingPlanKey{}
+	if !appending {
+		entry = h.cfg.GLMCodingPlan[*body.Index]
+	}
 	if body.Value.APIKey != nil {
 		entry.APIKey = strings.TrimSpace(*body.Value.APIKey)
 	}
@@ -140,7 +144,11 @@ func (h *Handler) PatchGLMCodingPlan(c *gin.Context) {
 		entry.Project = strings.TrimSpace(*body.Value.Project)
 	}
 	candidateEntries := append([]config.GLMCodingPlanKey(nil), h.cfg.GLMCodingPlan...)
-	candidateEntries[*body.Index] = entry
+	if appending {
+		candidateEntries = append(candidateEntries, entry)
+	} else {
+		candidateEntries[*body.Index] = entry
+	}
 	candidate := &config.Config{GLMCodingPlan: candidateEntries}
 	if errValidate := candidate.ValidateGLMCodingPlan(); errValidate != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": errValidate.Error()})
