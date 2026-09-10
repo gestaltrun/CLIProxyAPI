@@ -14,6 +14,7 @@ import (
 )
 
 const glmQuotaPollInterval = 10 * time.Minute
+const glmManagementHTTPTimeout = 30 * time.Second
 
 type glmQuotaSnapshot = glm.QuotaSnapshot
 
@@ -109,7 +110,7 @@ func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Aut
 	s.glmQuotaMu.Lock()
 	previous := s.glmQuotaSnapshots[auth.ID]
 	s.glmQuotaMu.Unlock()
-	client := s.newGLMHTTPClient(ctx, auth, 0)
+	client := s.newGLMHTTPClient(ctx, auth, glmManagementHTTPTimeout)
 	if s.glmQuotaBeforeFlight != nil {
 		s.glmQuotaBeforeFlight(auth.ID)
 	}

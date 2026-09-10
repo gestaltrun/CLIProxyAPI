@@ -378,7 +378,7 @@ func (s *Service) fetchGLMModelsForAuth(ctx context.Context, auth *coreauth.Auth
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
-	client := s.newGLMHTTPClient(ctx, auth, 0)
+	client := s.newGLMHTTPClient(ctx, auth, glmManagementHTTPTimeout)
 	resp, errDo := client.Do(req)
 	if errDo != nil {
 		return nil, fmt.Errorf("request GLM models: %w", errDo)

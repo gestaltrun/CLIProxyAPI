@@ -288,6 +288,42 @@ func TestGLMQuotaObservationDoesNotChangeInferenceEligibility(t *testing.T) {
 	}
 }
 
+func TestGLMManagementHTTPClientUsesBoundedTimeout(t *testing.T) {
+	var quotaTimeout time.Duration
+	service := &Service{
+		glmResolveEndpoints: func(string, string) (glm.Endpoints, error) {
+			return glm.Endpoints{QuotaURL: "https://fixture.invalid/quota", ModelsURL: "https://fixture.invalid/models"}, nil
+		},
+		glmHTTPClient: func(_ context.Context, _ *coreauth.Auth, timeout time.Duration) *http.Client {
+			quotaTimeout = timeout
+			return &http.Client{Transport: serviceRoundTripper(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"glm-5.3"}]}`))}, nil
+			})}
+		},
+		glmQuotaProbe: func(context.Context, *http.Client, glm.Endpoints, string, string, string, glm.QuotaSnapshot, time.Time) glm.QuotaSnapshot {
+			return glm.QuotaSnapshot{Status: "ready", ObservedAt: time.Unix(1, 0)}
+		},
+	}
+	auth := &coreauth.Auth{ID: "glm-timeout", Provider: glm.Provider, Attributes: map[string]string{"api_key": "secret", "glm_site": glm.SiteCN}}
+	service.refreshGLMQuotaForAuth(context.Background(), auth)
+	if quotaTimeout != glmManagementHTTPTimeout || quotaTimeout <= 0 {
+		t.Fatalf("quota timeout = %s, want %s", quotaTimeout, glmManagementHTTPTimeout)
+	}
+	var modelsTimeout time.Duration
+	service.glmHTTPClient = func(_ context.Context, _ *coreauth.Auth, timeout time.Duration) *http.Client {
+		modelsTimeout = timeout
+		return &http.Client{Transport: serviceRoundTripper(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"glm-5.3"}]}`))}, nil
+		})}
+	}
+	if _, err := service.fetchGLMModelsForAuth(context.Background(), auth); err != nil {
+		t.Fatal(err)
+	}
+	if modelsTimeout != glmManagementHTTPTimeout || modelsTimeout <= 0 {
+		t.Fatalf("models timeout = %s, want %s", modelsTimeout, glmManagementHTTPTimeout)
+	}
+}
+
 func TestGLMQuotaSignalsExposeStaleSnapshotWithoutSecrets(t *testing.T) {
 	signals := glmQuotaSignals(glm.QuotaSnapshot{
 		Status:           "stale",
