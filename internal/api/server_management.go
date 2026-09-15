@@ -87,6 +87,7 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PUT("/glm-coding-plan", s.mgmt.PutGLMCodingPlan)
 		mgmt.PATCH("/glm-coding-plan", s.mgmt.PatchGLMCodingPlan)
 		mgmt.DELETE("/glm-coding-plan", s.mgmt.DeleteGLMCodingPlan)
+		mgmt.POST("/glm-coding-plan/quota", s.mgmt.RefreshGLMCodingPlanQuota)
 
 		mgmt.GET("/gemini-api-key", s.mgmt.GetGeminiKeys)
 		mgmt.PUT("/gemini-api-key", s.mgmt.PutGeminiKeys)

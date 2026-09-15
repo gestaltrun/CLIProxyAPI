@@ -32,6 +32,39 @@ type QuotaSnapshot struct {
 	Error            string
 }
 
+// Signals returns the management-safe quota envelope written onto an auth record.
+func (snapshot QuotaSnapshot) Signals() map[string]string {
+	signals := map[string]string{
+		"GLM-Quota-Status":          snapshot.Status,
+		"GLM-Credential-Valid":      strconv.FormatBool(snapshot.CredentialValid),
+		"GLM-Quota-Last-Success-At": formatQuotaTime(snapshot.LastSuccessfulAt),
+	}
+	if snapshot.PlanLevel != "" {
+		signals["GLM-Plan-Level"] = snapshot.PlanLevel
+	}
+	for _, window := range snapshot.Windows {
+		prefix := "GLM-Quota-5h"
+		if window.Window == WindowWeekly {
+			prefix = "GLM-Quota-Weekly"
+		}
+		signals[prefix+"-Used-Percent"] = strconv.FormatFloat(window.UsedPercent, 'f', -1, 64)
+		if !window.ResetAt.IsZero() {
+			signals[prefix+"-Reset-At"] = window.ResetAt.UTC().Format(time.RFC3339)
+		}
+	}
+	if snapshot.Error != "" {
+		signals["GLM-Quota-Error"] = snapshot.Error
+	}
+	return signals
+}
+
+func formatQuotaTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return value.UTC().Format(time.RFC3339)
+}
+
 // ParseQuotaResponse parses a successful GLM quota response without depending on source-project types.
 func ParseQuotaResponse(body []byte) (string, []QuotaWindow, error) {
 	var envelope struct {

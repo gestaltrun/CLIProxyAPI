@@ -1,6 +1,7 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -8,9 +9,12 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/glm"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 func TestGetGLMCodingPlanRedactsAPIKey(t *testing.T) {
@@ -30,6 +34,60 @@ func TestGetGLMCodingPlanRedactsAPIKey(t *testing.T) {
 	}
 	if body.Entries[0].ProxyURL != "http://redacted@proxy.example.com:8080" {
 		t.Fatalf("proxy URL = %q", body.Entries[0].ProxyURL)
+	}
+}
+
+func TestGetGLMCodingPlanIncludesQuotaEnvelope(t *testing.T) {
+	manager := coreauth.NewManager(nil, nil, nil)
+	auth := &coreauth.Auth{
+		ID:       "glm-runtime",
+		Provider: glm.Provider,
+		Attributes: map[string]string{
+			"config_index": "0",
+			"source":       "config:glm-coding-plan[token]",
+		},
+		Quota: coreauth.QuotaState{
+			ObservedAt: time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC),
+			Signals: map[string]string{
+				"GLM-Quota-Status":          "ready",
+				"GLM-Quota-5h-Used-Percent": "12",
+			},
+		},
+	}
+	if _, errRegister := manager.Register(context.Background(), auth); errRegister != nil {
+		t.Fatal(errRegister)
+	}
+	h := NewHandlerWithoutConfigFilePath(&config.Config{GLMCodingPlan: []config.GLMCodingPlanKey{{APIKey: "secret-key", Site: "cn"}}}, manager)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/glm-coding-plan", nil)
+	h.GetGLMCodingPlan(ctx)
+	if recorder.Code != http.StatusOK || strings.Contains(recorder.Body.String(), "secret-key") {
+		t.Fatalf("response leaks secret: status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var body struct {
+		Entries []glmCodingPlanView `json:"glm-coding-plan"`
+	}
+	if errDecode := json.Unmarshal(recorder.Body.Bytes(), &body); errDecode != nil || len(body.Entries) != 1 {
+		t.Fatalf("response = %s err=%v", recorder.Body.String(), errDecode)
+	}
+	if body.Entries[0].AuthIndex == "" {
+		t.Fatalf("missing auth_index: %s", recorder.Body.String())
+	}
+	quotaSignals, ok := body.Entries[0].Quota["signals"].(map[string]any)
+	if !ok || quotaSignals["GLM-Quota-Status"] != "ready" || quotaSignals["GLM-Quota-5h-Used-Percent"] != "12" {
+		t.Fatalf("quota = %#v", body.Entries[0].Quota)
+	}
+}
+
+func TestRefreshGLMCodingPlanQuotaRequiresRuntimeAuth(t *testing.T) {
+	h := NewHandlerWithoutConfigFilePath(&config.Config{GLMCodingPlan: []config.GLMCodingPlanKey{{APIKey: "secret-key", Site: "cn"}}}, nil)
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/v0/management/glm-coding-plan/quota?index=0", nil)
+	h.RefreshGLMCodingPlanQuota(ctx)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

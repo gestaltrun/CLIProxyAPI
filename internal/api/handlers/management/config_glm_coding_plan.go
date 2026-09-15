@@ -1,15 +1,23 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/glm"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/proxyutil"
 )
+
+const glmQuotaRefreshTimeout = 30 * time.Second
 
 type glmCodingPlanView struct {
 	Index        int    `json:"index"`
@@ -21,13 +29,15 @@ type glmCodingPlanView struct {
 	ProxyURL     string `json:"proxy-url,omitempty"`
 	Organization string `json:"organization,omitempty"`
 	Project      string `json:"project,omitempty"`
+	AuthIndex    string `json:"auth_index,omitempty"`
+	Quota        gin.H  `json:"quota,omitempty"`
 }
 
-func glmCodingPlanViews(entries []config.GLMCodingPlanKey) []glmCodingPlanView {
+func glmCodingPlanViews(entries []config.GLMCodingPlanKey, auths []*coreauth.Auth) []glmCodingPlanView {
 	out := make([]glmCodingPlanView, 0, len(entries))
 	for index := range entries {
 		entry := entries[index]
-		out = append(out, glmCodingPlanView{
+		view := glmCodingPlanView{
 			Index:        index,
 			HasAPIKey:    strings.TrimSpace(entry.APIKey) != "",
 			Site:         entry.Site,
@@ -37,16 +47,134 @@ func glmCodingPlanViews(entries []config.GLMCodingPlanKey) []glmCodingPlanView {
 			ProxyURL:     proxyutil.Redact(entry.ProxyURL),
 			Organization: entry.Organization,
 			Project:      entry.Project,
-		})
+		}
+		if auth := matchingGLMCodingPlanAuth(auths, index); auth != nil {
+			view.AuthIndex = auth.EnsureIndex()
+			view.Quota = quotaObservationPayloadForProvider(auth.Provider, auth.Quota)
+		}
+		out = append(out, view)
 	}
 	return out
 }
 
-// GetGLMCodingPlan returns non-secret GLM Coding Plan configuration.
+func matchingGLMCodingPlanAuth(auths []*coreauth.Auth, index int) *coreauth.Auth {
+	wanted := strconv.Itoa(index)
+	for _, auth := range auths {
+		if auth == nil || !strings.EqualFold(strings.TrimSpace(auth.Provider), glm.Provider) {
+			continue
+		}
+		if strings.TrimSpace(authAttribute(auth, "config_index")) == wanted {
+			return auth
+		}
+	}
+	return nil
+}
+
+func glmAuthsFromManager(manager *coreauth.Manager) []*coreauth.Auth {
+	if manager == nil {
+		return nil
+	}
+	return manager.List()
+}
+
+// GetGLMCodingPlan returns non-secret GLM Coding Plan configuration and quota envelopes.
 func (h *Handler) GetGLMCodingPlan(c *gin.Context) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	c.JSON(http.StatusOK, gin.H{"glm-coding-plan": glmCodingPlanViews(h.cfg.GLMCodingPlan)})
+	entries := append([]config.GLMCodingPlanKey(nil), h.cfg.GLMCodingPlan...)
+	manager := h.authManager
+	h.mu.Unlock()
+	c.JSON(http.StatusOK, gin.H{"glm-coding-plan": glmCodingPlanViews(entries, glmAuthsFromManager(manager))})
+}
+
+// RefreshGLMCodingPlanQuota probes one GLM Coding Plan credential and returns its quota envelope.
+func (h *Handler) RefreshGLMCodingPlanQuota(c *gin.Context) {
+	var index int
+	if _, errScan := fmt.Sscanf(strings.TrimSpace(c.Query("index")), "%d", &index); errScan != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "index is required"})
+		return
+	}
+	h.mu.Lock()
+	if index < 0 || index >= len(h.cfg.GLMCodingPlan) {
+		h.mu.Unlock()
+		c.JSON(http.StatusNotFound, gin.H{"error": "item not found"})
+		return
+	}
+	entry := h.cfg.GLMCodingPlan[index]
+	manager := h.authManager
+	cfg := h.cfg
+	h.mu.Unlock()
+	auth := matchingGLMCodingPlanAuth(glmAuthsFromManager(manager), index)
+	if auth == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "runtime GLM credential is unavailable"})
+		return
+	}
+	endpoints, errEndpoints := glm.ResolveEndpointsForBase(entry.Site, authAttribute(auth, "base_url"))
+	if errEndpoints != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": errEndpoints.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), glmQuotaRefreshTimeout)
+	defer cancel()
+	client := helps.NewProxyAwareHTTPClient(ctx, cfg, auth, glmQuotaRefreshTimeout)
+	snapshot := glm.ProbeQuota(ctx, client, endpoints, entry.APIKey, entry.Organization, entry.Project, previousGLMQuotaSnapshot(auth.Quota), time.Now().UTC())
+	if _, errUpdate := manager.UpdateRuntimeObservation(coreauth.WithSkipPersist(ctx), auth.ID, func(updated *coreauth.Auth) {
+		updated.Quota.ObservedAt = snapshot.ObservedAt
+		updated.Quota.Signals = snapshot.Signals()
+	}); errUpdate != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record GLM quota observation"})
+		return
+	}
+	updated, _ := manager.GetByID(auth.ID)
+	if updated == nil {
+		updated = auth
+		updated.Quota.ObservedAt = snapshot.ObservedAt
+		updated.Quota.Signals = snapshot.Signals()
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"index":      index,
+		"auth_index": updated.EnsureIndex(),
+		"quota":      quotaObservationPayloadForProvider(updated.Provider, updated.Quota),
+	})
+}
+
+func previousGLMQuotaSnapshot(quota coreauth.QuotaState) glm.QuotaSnapshot {
+	signals := quota.Signals
+	if signals == nil {
+		signals = map[string]string{}
+	}
+	windows := make([]glm.QuotaWindow, 0, 2)
+	if used, ok := parseGLMUsedPercent(signals["GLM-Quota-5h-Used-Percent"]); ok {
+		windows = append(windows, glm.QuotaWindow{Window: glm.WindowFiveHour, UsedPercent: used, ResetAt: parseGLMTime(signals["GLM-Quota-5h-Reset-At"])})
+	}
+	if used, ok := parseGLMUsedPercent(signals["GLM-Quota-Weekly-Used-Percent"]); ok {
+		windows = append(windows, glm.QuotaWindow{Window: glm.WindowWeekly, UsedPercent: used, ResetAt: parseGLMTime(signals["GLM-Quota-Weekly-Reset-At"])})
+	}
+	return glm.QuotaSnapshot{
+		ObservedAt:       quota.ObservedAt,
+		LastSuccessfulAt: parseGLMTime(signals["GLM-Quota-Last-Success-At"]),
+		Status:           strings.TrimSpace(signals["GLM-Quota-Status"]),
+		CredentialValid:  strings.TrimSpace(signals["GLM-Credential-Valid"]) != "false",
+		PlanLevel:        strings.TrimSpace(signals["GLM-Plan-Level"]),
+		Windows:          windows,
+		Error:            strings.TrimSpace(signals["GLM-Quota-Error"]),
+	}
+}
+
+func parseGLMUsedPercent(value string) (float64, bool) {
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	return parsed, err == nil
+}
+
+func parseGLMTime(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 // PutGLMCodingPlan replaces the GLM Coding Plan credential list.
