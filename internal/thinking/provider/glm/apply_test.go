@@ -15,6 +15,7 @@ func TestGLMEffortMatrix(t *testing.T) {
 		want  string
 	}{
 		{model: "glm-5.3", level: thinking.LevelLow, want: "low"},
+		{model: "glm-5.3-flash", level: thinking.LevelLow, want: "low"},
 		{model: "glm-5.3", level: thinking.LevelMedium, want: "high"},
 		{model: "glm-5.3", level: thinking.LevelXHigh, want: "max"},
 		{model: "glm-4.7", level: thinking.LevelLow, want: "high"},

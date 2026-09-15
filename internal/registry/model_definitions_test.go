@@ -2,6 +2,29 @@ package registry
 
 import "testing"
 
+func TestGetStaticModelDefinitionsByChannelIncludesGLM(t *testing.T) {
+	models := GetStaticModelDefinitionsByChannel("glm")
+	if len(models) == 0 {
+		t.Fatal("GetStaticModelDefinitionsByChannel(glm) returned no models")
+	}
+	found := false
+	for _, model := range models {
+		if model == nil || model.ID != "glm-5.3" {
+			continue
+		}
+		found = true
+		if len(model.SupportedInputModalities) != 2 {
+			t.Fatalf("glm-5.3 input modalities = %#v", model.SupportedInputModalities)
+		}
+		if model.Thinking == nil || len(model.Thinking.Levels) == 0 {
+			t.Fatalf("glm-5.3 thinking = %#v", model.Thinking)
+		}
+	}
+	if !found {
+		t.Fatal("GetStaticModelDefinitionsByChannel(glm) missing glm-5.3")
+	}
+}
+
 func TestGetStaticModelDefinitionsByChannelSupportsGeminiInteractions(t *testing.T) {
 	models := GetStaticModelDefinitionsByChannel("gemini-interactions")
 	if len(models) == 0 {

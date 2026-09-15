@@ -77,6 +77,9 @@ func TestFetchGLMModelsForAuthUsesBearerAndDynamicCatalog(t *testing.T) {
 	if len(models) != 2 || models[0].ID != "glm-4.7" || models[1].ID != "glm-5.3" {
 		t.Fatalf("models = %#v", models)
 	}
+	if models[1].Thinking == nil || len(models[1].SupportedInputModalities) == 0 {
+		t.Fatalf("glm-5.3 static overlay missing: %#v", models[1])
+	}
 }
 
 func TestRefreshGLMQuotaCustomBaseDoesNotCreateHTTPClient(t *testing.T) {

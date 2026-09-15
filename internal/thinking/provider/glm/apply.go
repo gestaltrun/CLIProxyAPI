@@ -61,7 +61,7 @@ func glmEffort(config thinking.ThinkingConfig, model string) string {
 	default:
 		return ""
 	}
-	isGLM53 := strings.EqualFold(strings.TrimSpace(model), "glm-5.3")
+	isGLM53 := strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "glm-5.3")
 	switch level {
 	case thinking.LevelXHigh, thinking.LevelMax:
 		return "max"

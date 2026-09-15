@@ -409,7 +409,10 @@ func (s *Service) fetchGLMModelsForAuth(ctx context.Context, auth *coreauth.Auth
 		if id == "" {
 			continue
 		}
-		byID[id] = &ModelInfo{ID: id, Object: "model", Type: glm.Provider, OwnedBy: "zhipu", DisplayName: strings.TrimSpace(item.DisplayName), UserDefined: true}
+		byID[id] = registry.OverlayGLMModelDefinition(&registry.ModelInfo{
+			ID: id, Object: "model", Type: glm.Provider, OwnedBy: "zhipu",
+			DisplayName: strings.TrimSpace(item.DisplayName), UserDefined: true,
+		})
 	}
 	if len(byID) == 0 {
 		return nil, fmt.Errorf("GLM models response contained no models")
