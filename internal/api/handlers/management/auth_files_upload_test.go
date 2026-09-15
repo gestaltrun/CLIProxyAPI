@@ -67,3 +67,49 @@ func TestUploadAuthFile_PreservesPriorityAttributes(t *testing.T) {
 		t.Fatalf("priority metadata = %#v, want 98", got)
 	}
 }
+
+func TestUploadAuthFile_GLMCodingPlanAppearsOnAuthFiles(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	gin.SetMode(gin.TestMode)
+
+	authDir := t.TempDir()
+	manager := coreauth.NewManager(nil, nil, nil)
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
+
+	content := `{"type":"glm","api_key":"glm-secret","site":"cn"}`
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	req := httptest.NewRequest(http.MethodPost, "/v0/management/auth-files?name=glm-cn.json", bytes.NewBufferString(content))
+	ctx.Request = req
+	h.UploadAuthFile(ctx)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload status = %d body %s", rec.Code, rec.Body.String())
+	}
+
+	listRec := httptest.NewRecorder()
+	listCtx, _ := gin.CreateTestContext(listRec)
+	listCtx.Request = httptest.NewRequest(http.MethodGet, "/v0/management/auth-files", nil)
+	h.ListAuthFiles(listCtx)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d body %s", listRec.Code, listRec.Body.String())
+	}
+	var listed struct {
+		Files []map[string]any `json:"files"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listed.Files) != 1 {
+		t.Fatalf("files = %#v, want 1 glm account", listed.Files)
+	}
+	if listed.Files[0]["provider"] != "glm" {
+		t.Fatalf("provider = %#v, want glm", listed.Files[0]["provider"])
+	}
+	if listed.Files[0]["name"] != "glm-cn.json" {
+		t.Fatalf("name = %#v, want glm-cn.json", listed.Files[0]["name"])
+	}
+	auth, ok := manager.GetByID("glm-cn.json")
+	if !ok || auth == nil || auth.Attributes["api_key"] != "glm-secret" {
+		t.Fatalf("runtime glm auth = %#v", auth)
+	}
+}

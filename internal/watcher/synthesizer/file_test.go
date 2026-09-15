@@ -132,6 +132,66 @@ func TestFileSynthesizer_Synthesize_ValidAuthFile(t *testing.T) {
 	}
 }
 
+func TestFileSynthesizer_Synthesize_GLMCodingPlanFile(t *testing.T) {
+	tempDir := t.TempDir()
+	authData := map[string]any{
+		"type":         "glm",
+		"api_key":      "glm-secret",
+		"site":         "international",
+		"organization": "team-a",
+		"project":      "project-a",
+		"prefix":       "glm",
+	}
+	data, errMarshal := json.Marshal(authData)
+	if errMarshal != nil {
+		t.Fatalf("marshal glm auth: %v", errMarshal)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "glm-team.json"), data, 0o600); err != nil {
+		t.Fatalf("write glm auth: %v", err)
+	}
+	synth := NewFileSynthesizer()
+	auths, err := synth.Synthesize(&SynthesisContext{
+		Config:      &config.Config{},
+		AuthDir:     tempDir,
+		Now:         time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		IDGenerator: NewStableIDGenerator(),
+	})
+	if err != nil {
+		t.Fatalf("synthesize glm auth: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 glm auth, got %d", len(auths))
+	}
+	auth := auths[0]
+	if auth.Provider != "glm" {
+		t.Fatalf("provider = %q, want glm", auth.Provider)
+	}
+	if auth.FileName != "glm-team.json" {
+		t.Fatalf("FileName = %q, want glm-team.json", auth.FileName)
+	}
+	if auth.Label != "GLM Coding Plan" {
+		t.Fatalf("Label = %q, want GLM Coding Plan", auth.Label)
+	}
+	if auth.Attributes["api_key"] != "glm-secret" {
+		t.Fatalf("api_key = %q", auth.Attributes["api_key"])
+	}
+	if auth.Attributes["glm_site"] != "international" {
+		t.Fatalf("glm_site = %q", auth.Attributes["glm_site"])
+	}
+	if auth.Attributes["glm_organization"] != "team-a" {
+		t.Fatalf("glm_organization = %q", auth.Attributes["glm_organization"])
+	}
+	if auth.Attributes["glm_project"] != "project-a" {
+		t.Fatalf("glm_project = %q", auth.Attributes["glm_project"])
+	}
+	if auth.Attributes["base_url"] != "https://api.z.ai/api/coding/paas/v4" {
+		t.Fatalf("base_url = %q", auth.Attributes["base_url"])
+	}
+	if auth.Attributes["path"] == "" {
+		t.Fatal("expected file path attribute")
+	}
+}
+
 func TestFileSynthesizer_Synthesize_LegacyKimiFingerprintProfile(t *testing.T) {
 	tempDir := t.TempDir()
 	authData := map[string]any{

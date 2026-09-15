@@ -1,9 +1,11 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,7 +18,9 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/credentialweight"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/glm"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
@@ -211,6 +215,69 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"models": result})
+}
+
+// RefreshAuthFileQuota probes quota for one file-backed auth and returns the same envelope ListAuthFiles carries.
+func (h *Handler) RefreshAuthFileQuota(c *gin.Context) {
+	name := strings.TrimSpace(c.Query("name"))
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+	auth, ok := h.lookupAuthFile(name, "")
+	if !ok || auth == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "auth file not found"})
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(auth.Provider), glm.Provider) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "quota refresh is only supported for GLM auth files"})
+		return
+	}
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
+		return
+	}
+	endpoints, errEndpoints := glm.ResolveEndpointsForBase(authAttribute(auth, "glm_site"), authAttribute(auth, "base_url"))
+	if errEndpoints != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": errEndpoints.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), glmQuotaRefreshTimeout)
+	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "GLM quota refresh panicked"})
+		}
+	}()
+	client := helps.NewProxyAwareHTTPClient(ctx, h.cfg, auth, glmQuotaRefreshTimeout)
+	snapshot := glm.ProbeQuota(
+		ctx,
+		client,
+		endpoints,
+		authAttribute(auth, "api_key"),
+		authAttribute(auth, "glm_organization"),
+		authAttribute(auth, "glm_project"),
+		previousGLMQuotaSnapshot(auth.Quota),
+		time.Now().UTC(),
+	)
+	if _, errUpdate := h.authManager.UpdateRuntimeObservation(coreauth.WithSkipPersist(ctx), auth.ID, func(updated *coreauth.Auth) {
+		updated.Quota.ObservedAt = snapshot.ObservedAt
+		updated.Quota.Signals = snapshot.Signals()
+	}); errUpdate != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record GLM quota observation"})
+		return
+	}
+	updated, _ := h.authManager.GetByID(auth.ID)
+	if updated == nil {
+		updated = auth
+		updated.Quota.ObservedAt = snapshot.ObservedAt
+		updated.Quota.Signals = snapshot.Signals()
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"name":       name,
+		"auth_index": updated.EnsureIndex(),
+		"quota":      quotaObservationPayloadForProvider(updated.Provider, updated.Quota),
+	})
 }
 
 // List auth files from disk when the auth manager is unavailable.

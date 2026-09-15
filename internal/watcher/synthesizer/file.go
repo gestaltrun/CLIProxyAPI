@@ -12,6 +12,7 @@ import (
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/glm"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 	log "github.com/sirupsen/logrus"
@@ -143,9 +144,17 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 	if provider == "" || provider == "gemini-cli" {
 		return nil, nil
 	}
+	if provider == glm.Provider {
+		if errGLM := validateGLMFileMetadata(fullPath, metadata); errGLM != nil {
+			return nil, errGLM
+		}
+	}
 	label := provider
 	if email, _ := metadata["email"].(string); email != "" {
 		label = email
+	}
+	if provider == glm.Provider {
+		label = "GLM Coding Plan"
 	}
 	// Use relative path under authDir as ID to stay consistent with the file-based token store.
 	id := fullPath
@@ -184,6 +193,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 
 	a := &coreauth.Auth{
 		ID:       id,
+		FileName: filepath.Base(fullPath),
 		Provider: provider,
 		Label:    label,
 		Prefix:   prefix,
@@ -226,6 +236,9 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 	coreauth.SetOAuthModelAliasesAttribute(a, perAccountModelAliases)
 	ApplyAuthExcludedModelsMeta(a, cfg, perAccountExcluded, "oauth")
 	applyFingerprintProfileAttribute(a, metadata)
+	if provider == glm.Provider {
+		applyGLMFileAttributes(a, metadata)
+	}
 	// For codex auth files, extract plan_type from the JWT id_token.
 	if provider == "codex" {
 		if idTokenRaw, ok := metadata["id_token"].(string); ok && strings.TrimSpace(idTokenRaw) != "" {
@@ -237,6 +250,49 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) ([
 		}
 	}
 	return []*coreauth.Auth{a}, nil
+}
+
+func validateGLMFileMetadata(fullPath string, metadata map[string]any) error {
+	if strings.TrimSpace(metadataString(metadata, "api_key")) == "" {
+		return fmt.Errorf("glm auth file %s is missing api_key", filepath.Base(fullPath))
+	}
+	site := strings.ToLower(strings.TrimSpace(metadataString(metadata, "site")))
+	if site == "" {
+		site = glm.SiteCN
+	}
+	if _, errEndpoints := glm.ResolveEndpoints(site); errEndpoints != nil {
+		return fmt.Errorf("glm auth file %s site: %w", filepath.Base(fullPath), errEndpoints)
+	}
+	if strings.TrimSpace(metadataString(metadata, "project")) != "" && strings.TrimSpace(metadataString(metadata, "organization")) == "" {
+		return fmt.Errorf("glm auth file %s requires organization when project is set", filepath.Base(fullPath))
+	}
+	return nil
+}
+
+func applyGLMFileAttributes(auth *coreauth.Auth, metadata map[string]any) {
+	if auth == nil || auth.Attributes == nil {
+		return
+	}
+	site := strings.ToLower(strings.TrimSpace(metadataString(metadata, "site")))
+	if site == "" {
+		site = glm.SiteCN
+	}
+	endpoints, _ := glm.ResolveEndpoints(site)
+	auth.Attributes["api_key"] = strings.TrimSpace(metadataString(metadata, "api_key"))
+	auth.Attributes["glm_site"] = site
+	auth.Attributes["base_url"] = endpoints.CodingBaseURL
+	auth.Attributes["auth_kind"] = "apikey"
+	if organization := strings.TrimSpace(metadataString(metadata, "organization")); organization != "" {
+		auth.Attributes["glm_organization"] = organization
+	}
+	if project := strings.TrimSpace(metadataString(metadata, "project")); project != "" {
+		auth.Attributes["glm_project"] = project
+	}
+}
+
+func metadataString(metadata map[string]any, key string) string {
+	value, _ := metadata[key].(string)
+	return value
 }
 
 func parsePluginFileAuths(parser PluginAuthParser, req pluginapi.AuthParseRequest) ([]*coreauth.Auth, bool, error) {
