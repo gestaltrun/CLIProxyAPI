@@ -20,7 +20,7 @@ You can access the following providers locally and with multiple CLI accounts th
     </tr>
     <tr>
         <td align="center">GLM</td>
-        <td>GLM Coding Plan models through user-supplied CN or international Coding Plan API keys. Models are discovered dynamically, quota windows are exposed through the management API, and this provider does not use OAuth or PayG credentials.</td>
+        <td>GLM Coding Plan models through user-supplied CN or international Coding Plan API keys stored as auth-dir JSON files. Models are discovered dynamically, quota windows are exposed through auth-files, and this provider does not use OAuth or PayG credentials.</td>
     </tr>
     <tr>
         <td align="center"><a href="https://platform.openai.com/docs/guide/gpt-5.6"><img src="./assets/logo/openai.svg" alt="OpenAI" width="28" height="28" /></a></td>

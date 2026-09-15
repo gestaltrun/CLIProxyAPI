@@ -28,6 +28,8 @@ import (
 
 var lastRefreshKeys = []string{"last_refresh", "lastRefresh", "last_refreshed_at", "lastRefreshedAt"}
 
+const glmQuotaRefreshTimeout = 30 * time.Second
+
 var (
 	callbackForwardersMu  sync.Mutex
 	callbackForwarders    = make(map[int]*callbackForwarder)
@@ -694,6 +696,46 @@ func authAttribute(auth *coreauth.Auth, key string) string {
 		return ""
 	}
 	return auth.Attributes[key]
+}
+
+func previousGLMQuotaSnapshot(quota coreauth.QuotaState) glm.QuotaSnapshot {
+	signals := quota.Signals
+	if signals == nil {
+		signals = map[string]string{}
+	}
+	windows := make([]glm.QuotaWindow, 0, 2)
+	if used, ok := parseGLMUsedPercent(signals["GLM-Quota-5h-Used-Percent"]); ok {
+		windows = append(windows, glm.QuotaWindow{Window: glm.WindowFiveHour, UsedPercent: used, ResetAt: parseGLMTime(signals["GLM-Quota-5h-Reset-At"])})
+	}
+	if used, ok := parseGLMUsedPercent(signals["GLM-Quota-Weekly-Used-Percent"]); ok {
+		windows = append(windows, glm.QuotaWindow{Window: glm.WindowWeekly, UsedPercent: used, ResetAt: parseGLMTime(signals["GLM-Quota-Weekly-Reset-At"])})
+	}
+	return glm.QuotaSnapshot{
+		ObservedAt:       quota.ObservedAt,
+		LastSuccessfulAt: parseGLMTime(signals["GLM-Quota-Last-Success-At"]),
+		Status:           strings.TrimSpace(signals["GLM-Quota-Status"]),
+		CredentialValid:  strings.TrimSpace(signals["GLM-Credential-Valid"]) != "false",
+		PlanLevel:        strings.TrimSpace(signals["GLM-Plan-Level"]),
+		Windows:          windows,
+		Error:            strings.TrimSpace(signals["GLM-Quota-Error"]),
+	}
+}
+
+func parseGLMUsedPercent(value string) (float64, bool) {
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	return parsed, err == nil
+}
+
+func parseGLMTime(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func isRuntimeOnlyAuth(auth *coreauth.Auth) bool {
