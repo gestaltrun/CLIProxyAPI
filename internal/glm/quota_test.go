@@ -57,6 +57,17 @@ func TestProbeQuotaPreservesPreviousSnapshotOnUnauthorized(t *testing.T) {
 	}
 }
 
+func TestProbeQuotaHandlesNilResponseBody(t *testing.T) {
+	client := &http.Client{Transport: roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: nil, Header: make(http.Header)}, nil
+	})}
+	endpoints, _ := ResolveEndpoints(SiteCN)
+	got := ProbeQuota(context.Background(), client, endpoints, "secret", "", "", QuotaSnapshot{}, time.Unix(20, 0))
+	if got.Status != "error" || got.Error == "" {
+		t.Fatalf("snapshot = %#v", got)
+	}
+}
+
 func TestQuotaSnapshotSignals(t *testing.T) {
 	signals := QuotaSnapshot{
 		Status:           "ready",

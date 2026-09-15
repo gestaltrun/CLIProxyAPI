@@ -50,10 +50,20 @@ func ProbeQuota(ctx context.Context, client *http.Client, endpoint Endpoints, ap
 		result.Error = errRequest.Error()
 		return result
 	}
+	if client == nil {
+		result.Status = "error"
+		result.Error = "GLM quota request failed: missing HTTP client"
+		return result
+	}
 	resp, errDo := client.Do(req)
 	if errDo != nil {
 		result.Status = "error"
 		result.Error = fmt.Sprintf("GLM quota request failed: %v", errDo)
+		return result
+	}
+	if resp == nil || resp.Body == nil {
+		result.Status = "error"
+		result.Error = "GLM quota request returned no body"
 		return result
 	}
 	defer func() { _ = resp.Body.Close() }()
