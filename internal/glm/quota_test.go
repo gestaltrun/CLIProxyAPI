@@ -56,3 +56,19 @@ func TestProbeQuotaPreservesPreviousSnapshotOnUnauthorized(t *testing.T) {
 		t.Fatalf("snapshot = %#v", got)
 	}
 }
+
+func TestQuotaSnapshotSignals(t *testing.T) {
+	signals := QuotaSnapshot{
+		Status:           "ready",
+		CredentialValid:  true,
+		LastSuccessfulAt: time.Unix(10, 0).UTC(),
+		PlanLevel:        "pro",
+		Windows:          []QuotaWindow{{Window: WindowFiveHour, UsedPercent: 12, ResetAt: time.Unix(20, 0).UTC()}},
+	}.Signals()
+	if signals["GLM-Quota-Status"] != "ready" || signals["GLM-Plan-Level"] != "pro" || signals["GLM-Quota-5h-Used-Percent"] != "12" {
+		t.Fatalf("signals = %#v", signals)
+	}
+	if signals["GLM-Quota-Last-Success-At"] != time.Unix(10, 0).UTC().Format(time.RFC3339) {
+		t.Fatalf("last success = %q", signals["GLM-Quota-Last-Success-At"])
+	}
+}

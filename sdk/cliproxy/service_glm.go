@@ -3,7 +3,6 @@ package cliproxy
 import (
 	"context"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -142,40 +141,12 @@ func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Aut
 	s.glmQuotaMu.Unlock()
 	if _, errUpdate := s.coreManager.UpdateRuntimeObservation(coreauth.WithSkipPersist(ctx), auth.ID, func(updated *coreauth.Auth) {
 		updated.Quota.ObservedAt = snapshot.ObservedAt
-		updated.Quota.Signals = glmQuotaSignals(snapshot)
+		updated.Quota.Signals = snapshot.Signals()
 	}); errUpdate != nil {
 		log.WithError(errUpdate).Warn("GLM quota observation update failed")
 	}
 }
 
 func glmQuotaSignals(snapshot glmQuotaSnapshot) map[string]string {
-	signals := map[string]string{
-		"GLM-Quota-Status":          snapshot.Status,
-		"GLM-Credential-Valid":      strconv.FormatBool(snapshot.CredentialValid),
-		"GLM-Quota-Last-Success-At": formatGLMQuotaTime(snapshot.LastSuccessfulAt),
-	}
-	if snapshot.PlanLevel != "" {
-		signals["GLM-Plan-Level"] = snapshot.PlanLevel
-	}
-	for _, window := range snapshot.Windows {
-		prefix := "GLM-Quota-5h"
-		if window.Window == glm.WindowWeekly {
-			prefix = "GLM-Quota-Weekly"
-		}
-		signals[prefix+"-Used-Percent"] = strconv.FormatFloat(window.UsedPercent, 'f', -1, 64)
-		if !window.ResetAt.IsZero() {
-			signals[prefix+"-Reset-At"] = window.ResetAt.UTC().Format(time.RFC3339)
-		}
-	}
-	if snapshot.Error != "" {
-		signals["GLM-Quota-Error"] = snapshot.Error
-	}
-	return signals
-}
-
-func formatGLMQuotaTime(value time.Time) string {
-	if value.IsZero() {
-		return ""
-	}
-	return value.UTC().Format(time.RFC3339)
+	return snapshot.Signals()
 }
