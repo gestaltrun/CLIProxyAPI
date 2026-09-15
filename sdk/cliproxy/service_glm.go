@@ -67,6 +67,12 @@ func (s *Service) startGLMQuotaPolling(parent context.Context) {
 	}()
 }
 
+func recoverGLMQuota(scope string) {
+	if recovered := recover(); recovered != nil {
+		log.Errorf("GLM quota %s panicked: %v", scope, recovered)
+	}
+}
+
 func (s *Service) stopGLMQuotaPolling() {
 	if s == nil {
 		return
@@ -86,6 +92,7 @@ func (s *Service) stopGLMQuotaPolling() {
 }
 
 func (s *Service) refreshGLMQuota(ctx context.Context) {
+	defer recoverGLMQuota("poll")
 	for _, auth := range s.coreManager.List() {
 		if auth == nil || auth.Disabled || !strings.EqualFold(strings.TrimSpace(auth.Provider), glm.Provider) {
 			continue
@@ -98,6 +105,7 @@ func (s *Service) refreshGLMQuota(ctx context.Context) {
 }
 
 func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Auth) {
+	defer recoverGLMQuota("refresh")
 	if auth == nil || auth.Attributes == nil {
 		return
 	}
@@ -132,7 +140,11 @@ func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Aut
 	if errFlight != nil {
 		return
 	}
-	snapshot := value.(glm.QuotaSnapshot)
+	snapshot, ok := value.(glm.QuotaSnapshot)
+	if !ok {
+		log.Warn("GLM quota probe returned an unexpected snapshot")
+		return
+	}
 	s.glmQuotaMu.Lock()
 	if s.glmQuotaSnapshots == nil {
 		s.glmQuotaSnapshots = make(map[string]glmQuotaSnapshot)

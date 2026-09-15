@@ -115,6 +115,15 @@ func (h *Handler) RefreshGLMCodingPlanQuota(c *gin.Context) {
 	}
 	ctx, cancel := context.WithTimeout(c.Request.Context(), glmQuotaRefreshTimeout)
 	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "GLM quota refresh panicked"})
+		}
+	}()
+	if manager == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "runtime GLM credential is unavailable"})
+		return
+	}
 	client := helps.NewProxyAwareHTTPClient(ctx, cfg, auth, glmQuotaRefreshTimeout)
 	snapshot := glm.ProbeQuota(ctx, client, endpoints, entry.APIKey, entry.Organization, entry.Project, previousGLMQuotaSnapshot(auth.Quota), time.Now().UTC())
 	if _, errUpdate := manager.UpdateRuntimeObservation(coreauth.WithSkipPersist(ctx), auth.ID, func(updated *coreauth.Auth) {
