@@ -541,7 +541,7 @@ func extractThinkingConfig(body []byte, provider string) ThinkingConfig {
 		return extractGeminiConfig(body, provider)
 	case "interactions":
 		return extractInteractionsConfig(body)
-	case "openai":
+	case "openai", "glm":
 		return extractOpenAIConfig(body)
 	case "codex", "xai":
 		return extractCodexConfig(body)

@@ -1,9 +1,11 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -16,13 +18,17 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/credentialweight"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/glm"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/executor/helps"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 )
 
 var lastRefreshKeys = []string{"last_refresh", "lastRefresh", "last_refreshed_at", "lastRefreshedAt"}
+
+const glmQuotaRefreshTimeout = 30 * time.Second
 
 var (
 	callbackForwardersMu  sync.Mutex
@@ -211,6 +217,69 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 	}
 
 	c.JSON(200, gin.H{"models": result})
+}
+
+// RefreshAuthFileQuota probes quota for one file-backed auth and returns the same envelope ListAuthFiles carries.
+func (h *Handler) RefreshAuthFileQuota(c *gin.Context) {
+	name := strings.TrimSpace(c.Query("name"))
+	if name == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required"})
+		return
+	}
+	auth, ok := h.lookupAuthFile(name, "")
+	if !ok || auth == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "auth file not found"})
+		return
+	}
+	if !strings.EqualFold(strings.TrimSpace(auth.Provider), glm.Provider) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "quota refresh is only supported for GLM auth files"})
+		return
+	}
+	if h.authManager == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "core auth manager unavailable"})
+		return
+	}
+	endpoints, errEndpoints := glm.ResolveEndpointsForBase(authAttribute(auth, "glm_site"), authAttribute(auth, "base_url"))
+	if errEndpoints != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": errEndpoints.Error()})
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), glmQuotaRefreshTimeout)
+	defer cancel()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": "GLM quota refresh panicked"})
+		}
+	}()
+	client := helps.NewProxyAwareHTTPClient(ctx, h.cfg, auth, glmQuotaRefreshTimeout)
+	snapshot := glm.ProbeQuota(
+		ctx,
+		client,
+		endpoints,
+		authAttribute(auth, "api_key"),
+		authAttribute(auth, "glm_organization"),
+		authAttribute(auth, "glm_project"),
+		previousGLMQuotaSnapshot(auth.Quota),
+		time.Now().UTC(),
+	)
+	if _, errUpdate := h.authManager.UpdateRuntimeObservation(coreauth.WithSkipPersist(ctx), auth.ID, func(updated *coreauth.Auth) {
+		updated.Quota.ObservedAt = snapshot.ObservedAt
+		updated.Quota.Signals = snapshot.Signals()
+	}); errUpdate != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to record GLM quota observation"})
+		return
+	}
+	updated, _ := h.authManager.GetByID(auth.ID)
+	if updated == nil {
+		updated = auth
+		updated.Quota.ObservedAt = snapshot.ObservedAt
+		updated.Quota.Signals = snapshot.Signals()
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"name":       name,
+		"auth_index": updated.EnsureIndex(),
+		"quota":      quotaObservationPayloadForProvider(updated.Provider, updated.Quota),
+	})
 }
 
 // List auth files from disk when the auth manager is unavailable.
@@ -434,6 +503,14 @@ func (h *Handler) buildAuthFileEntryLocked(auth *coreauth.Auth) gin.H {
 	if requestRetry, ok := auth.RequestRetryOverride(); ok {
 		entry["request_retry"] = requestRetry
 	}
+	if strings.EqualFold(strings.TrimSpace(auth.Provider), "glm") && auth.Metadata != nil {
+		if status, okStatus := auth.Metadata["glm_models_status"].(string); okStatus && strings.TrimSpace(status) != "" {
+			entry["models_status"] = status
+		}
+		if category, okCategory := auth.Metadata["glm_models_error"].(string); okCategory && strings.TrimSpace(category) != "" {
+			entry["models_error"] = category
+		}
+	}
 	return entry
 }
 
@@ -619,6 +696,46 @@ func authAttribute(auth *coreauth.Auth, key string) string {
 		return ""
 	}
 	return auth.Attributes[key]
+}
+
+func previousGLMQuotaSnapshot(quota coreauth.QuotaState) glm.QuotaSnapshot {
+	signals := quota.Signals
+	if signals == nil {
+		signals = map[string]string{}
+	}
+	windows := make([]glm.QuotaWindow, 0, 2)
+	if used, ok := parseGLMUsedPercent(signals["GLM-Quota-5h-Used-Percent"]); ok {
+		windows = append(windows, glm.QuotaWindow{Window: glm.WindowFiveHour, UsedPercent: used, ResetAt: parseGLMTime(signals["GLM-Quota-5h-Reset-At"])})
+	}
+	if used, ok := parseGLMUsedPercent(signals["GLM-Quota-Weekly-Used-Percent"]); ok {
+		windows = append(windows, glm.QuotaWindow{Window: glm.WindowWeekly, UsedPercent: used, ResetAt: parseGLMTime(signals["GLM-Quota-Weekly-Reset-At"])})
+	}
+	return glm.QuotaSnapshot{
+		ObservedAt:       quota.ObservedAt,
+		LastSuccessfulAt: parseGLMTime(signals["GLM-Quota-Last-Success-At"]),
+		Status:           strings.TrimSpace(signals["GLM-Quota-Status"]),
+		CredentialValid:  strings.TrimSpace(signals["GLM-Credential-Valid"]) != "false",
+		PlanLevel:        strings.TrimSpace(signals["GLM-Plan-Level"]),
+		Windows:          windows,
+		Error:            strings.TrimSpace(signals["GLM-Quota-Error"]),
+	}
+}
+
+func parseGLMUsedPercent(value string) (float64, bool) {
+	parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+	return parsed, err == nil
+}
+
+func parseGLMTime(value string) time.Time {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func isRuntimeOnlyAuth(auth *coreauth.Auth) bool {
