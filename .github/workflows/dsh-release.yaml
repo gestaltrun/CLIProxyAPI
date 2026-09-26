@@ -1,5 +1,18 @@
 # Build and publish the five DeepSeek Harness (DSH) engine archives for a GLM fork tag.
 #
+# Two ways to start a release:
+# - Push a v*-glm* tag. sourceSHA is the tag's commit.
+# - Run the workflow manually with inputs tag (v*-glm*), target (branch or full commit SHA,
+#   default main), and unsigned. If the tag exists, sourceSHA is its commit and target is
+#   ignored. If it does not exist, sourceSHA is target resolved to a full SHA; after all five
+#   archives verify, the publish job creates the release with `gh release create --target
+#   <sourceSHA>`, and GitHub creates the tag on that commit server-side. A tag created with
+#   GITHUB_TOKEN does not start another workflow run.
+# Either way, an existing release for the tag is reused and assets are uploaded with
+# --clobber; a new release is created as a draft, filled, then published, so a published
+# release always lists all assets. The publish job refuses to continue if the tag points at
+# a commit other than sourceSHA.
+#
 # Each CLIProxyAPI_<version>_dsh_<platform>-<arch>.tar.gz holds the engine binary, LICENSE,
 # and manifest.json {sourceSHA, platform, arch, filename, sha256}; see
 # .github/scripts/dsh_archive.py. The release also carries dsh-cliproxyapi.json (all five
@@ -31,8 +44,13 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing GLM fork tag to build, for example v7.3.18-glm.1
+        description: GLM fork tag (v*-glm*), for example v7.3.18-glm.1; created on target if it does not exist
         required: true
+        type: string
+      target:
+        description: Branch or full commit SHA to tag when the tag does not exist yet; ignored for an existing tag
+        required: false
+        default: main
         type: string
       unsigned:
         description: Dry run without Darwin signing; uploads workflow artifacts only and never publishes
@@ -60,15 +78,17 @@ jobs:
       source_sha: ${{ steps.resolve.outputs.source_sha }}
       source_epoch: ${{ steps.resolve.outputs.source_epoch }}
       signed: ${{ steps.resolve.outputs.signed }}
+      tag_exists: ${{ steps.resolve.outputs.tag_exists }}
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
       - name: Resolve tag and source identity
         id: resolve
         shell: bash
         env:
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          TARGET: ${{ github.event_name == 'workflow_dispatch' && inputs.target || '' }}
           UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && inputs.unsigned }}
         run: |
           set -euo pipefail
@@ -76,11 +96,30 @@ jobs:
             echo "tag must match v*-glm* and contain only [0-9A-Za-z.-]: $TAG" >&2
             exit 1
           fi
-          source_sha="$(git rev-parse HEAD)"
-          tag_sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
-          if [[ "$source_sha" != "$tag_sha" ]]; then
-            echo "checkout $source_sha does not match tag $TAG ($tag_sha)" >&2
+          git fetch --force --tags origin
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            tag_exists=true
+            source_sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+            echo "Tag $TAG exists at $source_sha; target is ignored."
+          elif [[ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ]]; then
+            echo "tag $TAG is not present in origin" >&2
             exit 1
+          else
+            tag_exists=false
+            target="${TARGET:-main}"
+            if [[ "$target" =~ ^[0-9a-f]{40}$ ]]; then
+              if ! git cat-file -e "${target}^{commit}" 2>/dev/null; then
+                git fetch origin "$target" || { echo "commit $target is not reachable in origin" >&2; exit 1; }
+              fi
+              source_sha="$(git rev-parse "${target}^{commit}")"
+            elif git check-ref-format --branch "$target" >/dev/null 2>&1; then
+              git fetch origin "+refs/heads/${target}:refs/remotes/origin/${target}" || { echo "branch $target does not exist in origin" >&2; exit 1; }
+              source_sha="$(git rev-parse "refs/remotes/origin/${target}^{commit}")"
+            else
+              echo "target must be a branch name or a full 40-character commit SHA: $target" >&2
+              exit 1
+            fi
+            echo "Tag $TAG does not exist; publish will create it on $source_sha (target $target)."
           fi
           signed=true
           if [[ "$UNSIGNED" == "true" ]]; then signed=false; fi
@@ -88,8 +127,9 @@ jobs:
             echo "tag=$TAG"
             echo "version=${TAG#v}"
             echo "source_sha=$source_sha"
-            echo "source_epoch=$(git show -s --format=%ct HEAD)"
+            echo "source_epoch=$(git show -s --format=%ct "$source_sha")"
             echo "signed=$signed"
+            echo "tag_exists=$tag_exists"
           } >> "$GITHUB_OUTPUT"
 
   build:
@@ -231,7 +271,28 @@ jobs:
 
           DSH product archives (\`CLIProxyAPI_${TAG#v}_dsh_<platform>-<arch>.tar.gz\`) carry \`cli-proxy-api\` (\`cli-proxy-api.exe\` on win32), \`LICENSE\`, and \`manifest.json\` (\`sourceSHA\`, \`platform\`, \`arch\`, \`filename\`, \`sha256\`). Darwin binaries are signed with a Developer ID Application certificate and hardened runtime. \`dsh-cliproxyapi.json\` lists all five target identities.
           EOF
+          assets=(dist/CLIProxyAPI_*_dsh_*.tar.gz dist/dsh-cliproxyapi.json dist/checksums.txt)
+
+          # Fail when the tag exists on a commit other than the one the archives were built from.
+          check_tag() {
+            local ref tag_sha
+            ref="$(git ls-remote origin "refs/tags/${TAG}^{}" "refs/tags/${TAG}" | awk '{print $1}' | head -n 1)"
+            [[ -z "$ref" ]] && return 1
+            git fetch --force origin "+refs/tags/${TAG}:refs/tags/${TAG}"
+            tag_sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+            if [[ "$tag_sha" != "$SOURCE_SHA" ]]; then
+              echo "tag $TAG points at $tag_sha, but the archives were built from $SOURCE_SHA" >&2
+              exit 1
+            fi
+          }
+          check_tag || echo "Tag $TAG does not exist yet; the release will create it on $SOURCE_SHA."
+
           if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$notes"
+            gh release create "$TAG" --draft --target "$SOURCE_SHA" --title "$TAG" --notes-file "$notes"
           fi
-          gh release upload "$TAG" dist/CLIProxyAPI_*_dsh_*.tar.gz dist/dsh-cliproxyapi.json dist/checksums.txt --clobber
+          gh release upload "$TAG" "${assets[@]}" --clobber
+          # A draft left by an interrupted run is published here as well.
+          if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" == "true" ]]; then
+            gh release edit "$TAG" --target "$SOURCE_SHA" --draft=false
+          fi
+          check_tag || { echo "tag $TAG was not created" >&2; exit 1; }
