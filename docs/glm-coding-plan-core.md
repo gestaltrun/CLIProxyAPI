@@ -54,6 +54,8 @@ Custom upstream bases do not imply permission to send their key to an official q
 
 `ModelsForAuth` reads the selected Coding Plan `/models` response and returns a deduplicated non-empty catalog. It distinguishes configuration, authentication, upstream status, malformed or oversized response, and empty-catalog failures.
 
+Discovery and quota probes read the API key, site, organization, and project from the synthesized auth attributes and fall back to the auth file fields. At startup the core manager registers models for auths loaded by the file token store, which carry only the file fields until the watcher replaces them with synthesized auths, so both versions must resolve the same credentials. A missing API key is a `configuration` failure. Discovery failures are logged at debug level with the auth ID and the error, which never contains the key.
+
 A static list is not evidence of models granted to a key. If a later implementation adds a fallback catalog, the response and management surface must distinguish fallback or stale data from a successful live catalog.
 
 ### Static management definitions

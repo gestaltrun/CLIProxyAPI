@@ -27,6 +27,45 @@ func (s *Service) resolveGLMEndpoints(site, selectedBaseURL string) (glm.Endpoin
 	return glm.ResolveEndpointsForBase(site, selectedBaseURL)
 }
 
+// glmCredentials holds the GLM Coding Plan settings needed for model discovery and quota probes.
+type glmCredentials struct {
+	apiKey       string
+	site         string
+	baseURL      string
+	organization string
+	project      string
+}
+
+// glmCredentialsForAuth reads GLM settings from the attributes the file synthesizer applies and
+// falls back to the auth file fields in Metadata. Auths loaded by the file token store at
+// startup carry only Metadata until the watcher replaces them with synthesized auths, and
+// model registration can run for either version. ok is false when no API key is present.
+func glmCredentialsForAuth(auth *coreauth.Auth) (glmCredentials, bool) {
+	if auth == nil {
+		return glmCredentials{}, false
+	}
+	value := func(attribute, metadataKey string) string {
+		if v := strings.TrimSpace(auth.Attributes[attribute]); v != "" {
+			return v
+		}
+		if raw, ok := auth.Metadata[metadataKey].(string); ok {
+			return strings.TrimSpace(raw)
+		}
+		return ""
+	}
+	credentials := glmCredentials{
+		apiKey:       value("api_key", "api_key"),
+		site:         strings.ToLower(value("glm_site", "site")),
+		baseURL:      strings.TrimSpace(auth.Attributes["base_url"]),
+		organization: value("glm_organization", "organization"),
+		project:      value("glm_project", "project"),
+	}
+	if credentials.site == "" {
+		credentials.site = glm.SiteCN
+	}
+	return credentials, credentials.apiKey != ""
+}
+
 func (s *Service) newGLMHTTPClient(ctx context.Context, auth *coreauth.Auth, timeout time.Duration) *http.Client {
 	if s != nil && s.glmHTTPClient != nil {
 		return s.glmHTTPClient(ctx, auth, timeout)
@@ -106,10 +145,11 @@ func (s *Service) refreshGLMQuota(ctx context.Context) {
 
 func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Auth) {
 	defer recoverGLMQuota("refresh")
-	if auth == nil || auth.Attributes == nil {
+	credentials, ok := glmCredentialsForAuth(auth)
+	if !ok {
 		return
 	}
-	endpoints, errEndpoints := s.resolveGLMEndpoints(auth.Attributes["glm_site"], auth.Attributes["base_url"])
+	endpoints, errEndpoints := s.resolveGLMEndpoints(credentials.site, credentials.baseURL)
 	if errEndpoints != nil {
 		log.WithError(errEndpoints).Warn("GLM quota endpoint resolution failed")
 		return
@@ -130,9 +170,9 @@ func (s *Service) refreshGLMQuotaForAuth(ctx context.Context, auth *coreauth.Aut
 			ctx,
 			client,
 			endpoints,
-			auth.Attributes["api_key"],
-			auth.Attributes["glm_organization"],
-			auth.Attributes["glm_project"],
+			credentials.apiKey,
+			credentials.organization,
+			credentials.project,
 			previous,
 			time.Now().UTC(),
 		), nil
