@@ -13,10 +13,13 @@
 # Darwin targets build on macOS so the binary can be codesigned before its digest enters
 # manifest.json.
 #
-# Darwin signing uses the same settings as the Desktop release: secrets CSC_LINK (base64
-# PKCS#12 with the Developer ID Application certificate) and CSC_KEY_PASSWORD, variables
+# Darwin signing uses the same settings as the Desktop release: secret CSC_LINK (base64
+# PKCS#12 with the Developer ID Application certificate), variables
 # DESKTOP_RELEASE_MACOS_SIGNING_IDENTITY (without the "Developer ID Application:" prefix)
-# and DESKTOP_RELEASE_MACOS_TEAM_ID. A tag push fails when any is missing. Only a manual
+# and DESKTOP_RELEASE_MACOS_TEAM_ID, and optional secret CSC_KEY_PASSWORD, the PKCS#12
+# export password passed to `security import` unchanged. GitHub secrets cannot be empty,
+# so an empty export password means CSC_KEY_PASSWORD is not defined. A tag push fails when
+# CSC_LINK or either variable is missing. Only a manual
 # run with unsigned=true may skip signing; such a run uploads workflow artifacts and never
 # publishes a release.
 name: dsh-release
@@ -131,7 +134,7 @@ jobs:
           TEAM_ID: ${{ vars.DESKTOP_RELEASE_MACOS_TEAM_ID }}
         run: |
           set -euo pipefail
-          for name in CSC_LINK CSC_KEY_PASSWORD SIGNING_IDENTITY TEAM_ID; do
+          for name in CSC_LINK SIGNING_IDENTITY TEAM_ID; do
             if [[ -z "${!name}" ]]; then
               echo "Missing $name: Darwin DSH archives must be signed (use a manual run with unsigned=true for a dry run)" >&2
               exit 1
@@ -156,7 +159,10 @@ jobs:
           existing="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
           # shellcheck disable=SC2086
           security list-keychains -d user -s "$keychain" $existing
-          security import "$work/certificate.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null
+          if ! security import "$work/certificate.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null; then
+            echo "security import rejected CSC_LINK with CSC_KEY_PASSWORD: the PKCS#12 export password is wrong or the certificate is invalid. For an empty export password, delete the CSC_KEY_PASSWORD secret." >&2
+            exit 1
+          fi
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
 
           binary="dist/bin/$FILENAME"
