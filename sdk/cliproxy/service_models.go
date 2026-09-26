@@ -17,6 +17,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	log "github.com/sirupsen/logrus"
 )
 
 // registerModelsForAuth (re)binds provider models in the global registry using the core auth ID as client identifier.
@@ -162,6 +163,9 @@ func (s *Service) registerModelsForAuthWithCache(ctx context.Context, a *coreaut
 	case glm.Provider:
 		var errModels error
 		models, errModels = s.fetchGLMModelsForAuth(ctx, a)
+		if errModels != nil {
+			log.WithError(errModels).WithField("auth", a.ID).Debug("GLM model discovery failed")
+		}
 		s.recordGLMModelDiscovery(ctx, a.ID, errModels)
 		models = applyExcludedModels(models, excluded)
 	case "xai":
@@ -387,14 +391,12 @@ func (s *Service) latestAuthForModelRegistration(authID string) (*coreauth.Auth,
 var glmModelsMaxBodyBytes int64 = 1 << 20
 
 func (s *Service) fetchGLMModelsForAuth(ctx context.Context, auth *coreauth.Auth) ([]*ModelInfo, error) {
-	if auth == nil || auth.Attributes == nil {
-		return nil, fmt.Errorf("GLM model discovery requires auth attributes")
+	credentials, ok := glmCredentialsForAuth(auth)
+	if !ok {
+		return nil, fmt.Errorf("GLM model discovery requires auth with an API key")
 	}
-	apiKey := strings.TrimSpace(auth.Attributes["api_key"])
-	if apiKey == "" {
-		return nil, fmt.Errorf("GLM model discovery requires an API key")
-	}
-	endpoints, errEndpoints := s.resolveGLMEndpoints(auth.Attributes["glm_site"], auth.Attributes["base_url"])
+	apiKey := credentials.apiKey
+	endpoints, errEndpoints := s.resolveGLMEndpoints(credentials.site, credentials.baseURL)
 	if errEndpoints != nil {
 		return nil, errEndpoints
 	}
