@@ -5,6 +5,8 @@ on:
     # run only against tags
     tags:
       - '*'
+      # GLM fork tags publish DSH archives through dsh-release.yaml instead.
+      - '!v*-glm*'
 
 permissions:
   contents: write

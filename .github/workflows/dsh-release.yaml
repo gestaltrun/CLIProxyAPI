@@ -1,0 +1,231 @@
+# Build and publish the five DeepSeek Harness (DSH) engine archives for a GLM fork tag.
+#
+# Each CLIProxyAPI_<version>_dsh_<platform>-<arch>.tar.gz holds the engine binary, LICENSE,
+# and manifest.json {sourceSHA, platform, arch, filename, sha256}; see
+# .github/scripts/dsh_archive.py. The release also carries dsh-cliproxyapi.json (all five
+# target identities) and checksums.txt.
+#
+# Build settings: Go GO_VERSION (same as release.yaml), CGO_ENABLED=0, -trimpath, and the
+# committed model catalogs (no refresh), so linux and windows binaries are reproducible
+# from sourceSHA. CGO is off on every target, matching the v7.2.155-glm.* DSH archives:
+# the account-pool product does not load dynamic library plugins, and a pure-Go build
+# cross-compiles on GitHub-hosted runners without a C toolchain or glibc baseline image.
+# Darwin targets build on macOS so the binary can be codesigned before its digest enters
+# manifest.json.
+#
+# Darwin signing uses the same settings as the Desktop release: secrets CSC_LINK (base64
+# PKCS#12 with the Developer ID Application certificate) and CSC_KEY_PASSWORD, variables
+# DESKTOP_RELEASE_MACOS_SIGNING_IDENTITY (without the "Developer ID Application:" prefix)
+# and DESKTOP_RELEASE_MACOS_TEAM_ID. A tag push fails when any is missing. Only a manual
+# run with unsigned=true may skip signing; such a run uploads workflow artifacts and never
+# publishes a release.
+name: dsh-release
+
+on:
+  push:
+    tags:
+      - 'v*-glm*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing GLM fork tag to build, for example v7.3.18-glm.1
+        required: true
+        type: string
+      unsigned:
+        description: Dry run without Darwin signing; uploads workflow artifacts only and never publishes
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dsh-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  GO_VERSION: '1.26.4'
+  DSH_REPOSITORY: https://github.com/gestaltrun/CLIProxyAPI.git
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      version: ${{ steps.resolve.outputs.version }}
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
+      source_epoch: ${{ steps.resolve.outputs.source_epoch }}
+      signed: ${{ steps.resolve.outputs.signed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+      - name: Resolve tag and source identity
+        id: resolve
+        shell: bash
+        env:
+          TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          UNSIGNED: ${{ github.event_name == 'workflow_dispatch' && inputs.unsigned }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[0-9A-Za-z.-]+$ || "$TAG" != *-glm* ]]; then
+            echo "tag must match v*-glm* and contain only [0-9A-Za-z.-]: $TAG" >&2
+            exit 1
+          fi
+          source_sha="$(git rev-parse HEAD)"
+          tag_sha="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+          if [[ "$source_sha" != "$tag_sha" ]]; then
+            echo "checkout $source_sha does not match tag $TAG ($tag_sha)" >&2
+            exit 1
+          fi
+          signed=true
+          if [[ "$UNSIGNED" == "true" ]]; then signed=false; fi
+          {
+            echo "tag=$TAG"
+            echo "version=${TAG#v}"
+            echo "source_sha=$source_sha"
+            echo "source_epoch=$(git show -s --format=%ct HEAD)"
+            echo "signed=$signed"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: resolve
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: darwin, arch: arm64, runner: macos-15, filename: cli-proxy-api }
+          - { platform: darwin, arch: x64, runner: macos-15, filename: cli-proxy-api }
+          - { platform: linux, arch: arm64, runner: ubuntu-latest, filename: cli-proxy-api }
+          - { platform: linux, arch: x64, runner: ubuntu-latest, filename: cli-proxy-api }
+          - { platform: win32, arch: x64, runner: ubuntu-latest, filename: cli-proxy-api.exe }
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
+      FILENAME: ${{ matrix.filename }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+      SOURCE_EPOCH: ${{ needs.resolve.outputs.source_epoch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Build binary
+        shell: bash
+        run: python3 .github/scripts/dsh_archive.py build --platform "$PLATFORM" --arch "$ARCH" --version "$VERSION" --out "dist/bin"
+
+      - name: Sign Darwin binary
+        if: matrix.platform == 'darwin' && needs.resolve.outputs.signed == 'true'
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          SIGNING_IDENTITY: ${{ vars.DESKTOP_RELEASE_MACOS_SIGNING_IDENTITY }}
+          TEAM_ID: ${{ vars.DESKTOP_RELEASE_MACOS_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for name in CSC_LINK CSC_KEY_PASSWORD SIGNING_IDENTITY TEAM_ID; do
+            if [[ -z "${!name}" ]]; then
+              echo "Missing $name: Darwin DSH archives must be signed (use a manual run with unsigned=true for a dry run)" >&2
+              exit 1
+            fi
+          done
+          if [[ "$SIGNING_IDENTITY" == "Developer ID Application:"* ]]; then
+            echo "DESKTOP_RELEASE_MACOS_SIGNING_IDENTITY must omit the \"Developer ID Application:\" prefix" >&2
+            exit 1
+          fi
+          work="$(mktemp -d "$RUNNER_TEMP/dsh-signing.XXXXXX")"
+          keychain="$work/signing.keychain-db"
+          keychain_password="$(openssl rand -base64 32)"
+          cleanup() {
+            security delete-keychain "$keychain" >/dev/null 2>&1 || true
+            rm -rf "$work"
+          }
+          trap cleanup EXIT
+          printf '%s' "$CSC_LINK" | python3 -c 'import base64, sys; sys.stdout.buffer.write(base64.b64decode("".join(sys.stdin.read().split()), validate=True))' > "$work/certificate.p12"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          existing="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
+          # shellcheck disable=SC2086
+          security list-keychains -d user -s "$keychain" $existing
+          security import "$work/certificate.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
+
+          binary="dist/bin/$FILENAME"
+          authority="Developer ID Application: $SIGNING_IDENTITY"
+          codesign --force --sign "$authority" --keychain "$keychain" --timestamp --options runtime "$binary"
+          codesign --verify --strict --verbose=2 "$binary"
+          details="$(codesign --display --verbose=4 "$binary" 2>&1)"
+          printf '%s\n' "$details" | grep -E '^(Identifier|Format|CodeDirectory|Authority|Timestamp|TeamIdentifier)'
+          grep -Fxq "Authority=$authority" <<<"$details" || { echo "unexpected signing authority" >&2; exit 1; }
+          grep -Fxq "TeamIdentifier=$TEAM_ID" <<<"$details" || { echo "unexpected team identifier" >&2; exit 1; }
+          grep -Eq '^CodeDirectory .*flags=0x[0-9a-f]*\(runtime\)' <<<"$details" || { echo "hardened runtime flag missing" >&2; exit 1; }
+          grep -Eq '^Timestamp=' <<<"$details" || { echo "secure timestamp missing" >&2; exit 1; }
+
+      - name: Package and verify archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/dsh_archive.py package --platform "$PLATFORM" --arch "$ARCH" --version "$VERSION" \
+            --source-sha "$SOURCE_SHA" --binary "dist/bin/$FILENAME" --mtime "$SOURCE_EPOCH" --out dist/archive
+          python3 .github/scripts/dsh_archive.py verify --platform "$PLATFORM" --arch "$ARCH" --source-sha "$SOURCE_SHA" \
+            --archive "dist/archive/CLIProxyAPI_${VERSION}_dsh_${PLATFORM}-${ARCH}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/archive/CLIProxyAPI_*_dsh_*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.resolve.outputs.tag }}
+      SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+      SIGNED: ${{ needs.resolve.outputs.signed }}
+      GH_REPO: ${{ github.repository }}
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dsh-*
+          path: dist
+          merge-multiple: true
+      - name: Write release metadata
+        shell: bash
+        run: python3 .github/scripts/dsh_archive.py index --tag "$TAG" --source-sha "$SOURCE_SHA" --repository "$DSH_REPOSITORY" --dir dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-release-metadata
+          path: |
+            dist/dsh-cliproxyapi.json
+            dist/checksums.txt
+          if-no-files-found: error
+      - name: Publish release
+        if: needs.resolve.outputs.signed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          notes="$(mktemp)"
+          cat > "$notes" <<EOF
+          GLM Coding Plan fork build of \`${SOURCE_SHA}\`.
+
+          DSH product archives (\`CLIProxyAPI_${TAG#v}_dsh_<platform>-<arch>.tar.gz\`) carry \`cli-proxy-api\` (\`cli-proxy-api.exe\` on win32), \`LICENSE\`, and \`manifest.json\` (\`sourceSHA\`, \`platform\`, \`arch\`, \`filename\`, \`sha256\`). Darwin binaries are signed with a Developer ID Application certificate and hardened runtime. \`dsh-cliproxyapi.json\` lists all five target identities.
+          EOF
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file "$notes"
+          fi
+          gh release upload "$TAG" dist/CLIProxyAPI_*_dsh_*.tar.gz dist/dsh-cliproxyapi.json dist/checksums.txt --clobber
