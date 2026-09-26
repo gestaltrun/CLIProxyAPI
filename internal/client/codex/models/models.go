@@ -1011,3 +1011,23 @@ func cloneCodexClientModelValue(value any) any {
 		return value
 	}
 }
+
+// ClientContextWindows reports the Codex client catalog's default and maximum context windows for one model.
+// The default window is what Codex clients budget by default; the maximum is the largest window the model accepts.
+// ok is false when the catalog has no template for the model or the template omits both windows.
+func ClientContextWindows(id string) (contextWindow int, maxContextWindow int, ok bool) {
+	templates, _, err := loadCodexClientModelTemplates()
+	if err != nil {
+		return 0, 0, false
+	}
+	template, found := templates[codexClientMetadataModelID(id)]
+	if !found {
+		return 0, 0, false
+	}
+	contextWindow = intModelValue(template, "context_window")
+	maxContextWindow = intModelValue(template, "max_context_window")
+	if maxContextWindow < contextWindow {
+		maxContextWindow = contextWindow
+	}
+	return contextWindow, maxContextWindow, maxContextWindow > 0
+}

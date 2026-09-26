@@ -56,6 +56,19 @@ Custom upstream bases do not imply permission to send their key to an official q
 
 A static list is not evidence of models granted to a key. If a later implementation adds a fallback catalog, the response and management surface must distinguish fallback or stale data from a successful live catalog.
 
+### Static management definitions
+
+`GET /v0/management/model-definitions/glm` returns the built-in GLM definitions (`glm-5-turbo`, `glm-5.1`, `glm-5.2`, `glm-5.3`, `glm-5.3-flash`) for management clients that label models before a key is enrolled. They carry display metadata and reasoning levels only; `ModelsForAuth` remains the source of models routed for a key.
+
+Every channel of `GET /v0/management/model-definitions/{channel}` adds two integer fields to each model that has a known window:
+
+| Field | Meaning | Source |
+| --- | --- | --- |
+| `context_window` | Default context budget a client should plan for | Codex channel: `context_window` from the Codex client catalog. Other channels, and Codex models whose catalog entry omits it: `context_length`. |
+| `max_context_window` | Largest context the model accepts | Codex channel: `max_context_window` from the Codex client catalog. Other channels: `context_length`. Never smaller than `context_window`. |
+
+For example, Codex `gpt-6-astra` reports `context_window: 272000` and `max_context_window: 872000`; every GLM definition reports `202752` for both. Existing fields such as `context_length` and `max_completion_tokens` are unchanged.
+
 ## Reasoning policy
 
 The GLM policy is implemented as a provider applier after canonical `ThinkingConfig` normalization.
