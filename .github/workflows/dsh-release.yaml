@@ -31,7 +31,9 @@
 # DESKTOP_RELEASE_MACOS_SIGNING_IDENTITY (without the "Developer ID Application:" prefix)
 # and DESKTOP_RELEASE_MACOS_TEAM_ID, and optional secret CSC_KEY_PASSWORD, the PKCS#12
 # export password passed to `security import` unchanged. GitHub secrets cannot be empty,
-# so an empty export password means CSC_KEY_PASSWORD is not defined. A tag push fails when
+# so an empty export password means CSC_KEY_PASSWORD is not defined; the step then re-wraps
+# the PKCS#12 with a random temporary password (.github/scripts/dsh-rewrap-p12.sh) because
+# `security import` rejects some empty-password files. A tag push fails when
 # CSC_LINK or either variable is missing. Only a manual
 # run with unsigned=true may skip signing; such a run uploads workflow artifacts and never
 # publishes a release.
@@ -199,9 +201,22 @@ jobs:
           existing="$(security list-keychains -d user | sed -e 's/^[[:space:]]*"//' -e 's/"$//')"
           # shellcheck disable=SC2086
           security list-keychains -d user -s "$keychain" $existing
-          if ! security import "$work/certificate.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null; then
-            echo "security import rejected CSC_LINK with CSC_KEY_PASSWORD: the PKCS#12 export password is wrong or the certificate is invalid. For an empty export password, delete the CSC_KEY_PASSWORD secret." >&2
-            exit 1
+          if [[ -n "$CSC_KEY_PASSWORD" ]]; then
+            if ! security import "$work/certificate.p12" -k "$keychain" -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign >/dev/null; then
+              echo "security import rejected CSC_LINK with CSC_KEY_PASSWORD: the PKCS#12 export password is wrong or the certificate is invalid. For an empty export password, delete the CSC_KEY_PASSWORD secret." >&2
+              exit 1
+            fi
+          else
+            # security import rejects some empty-password PKCS#12 files; re-wrap with a temporary password.
+            rewrap_password="$(openssl rand -base64 32)"
+            echo "::add-mask::$rewrap_password"
+            DSH_P12_PASSWORD="$rewrap_password" bash .github/scripts/dsh-rewrap-p12.sh "$work/certificate.p12" "$work/rewrapped.p12"
+            rm -f "$work/certificate.p12"
+            if ! security import "$work/rewrapped.p12" -k "$keychain" -P "$rewrap_password" -T /usr/bin/codesign >/dev/null; then
+              echo "security import rejected the re-wrapped CSC_LINK certificate; check that CSC_LINK holds the Developer ID Application certificate and its private key." >&2
+              exit 1
+            fi
+            rm -f "$work/rewrapped.p12"
           fi
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain" >/dev/null
 
