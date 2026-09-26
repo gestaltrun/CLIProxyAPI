@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - v*
+      # GLM fork tags publish DSH archives only (dsh-release.yaml).
+      - '!v*-glm*'
 
 env:
   APP_NAME: CLIProxyAPI
