@@ -118,7 +118,11 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	isCompat := helps.APIKeyModelIsCompat(req)
 	originalTranslated, translated, updatesChanged := helps.TranslateRequestPairWithAPIKeyModelCompatibilityAndUpdateIntent(ctx, opts.Headers, e.cfg, from, to, baseModel, originalPayload, req.Payload, opts.Stream, isCompat)
 
-	translated, err = helps.ApplyRequestThinking(translated, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged)
+	thinkingFormat := to.String()
+	if strings.EqualFold(e.Identifier(), "glm") {
+		thinkingFormat = "glm"
+	}
+	translated, err = helps.ApplyRequestThinking(translated, req, opts, from.String(), thinkingFormat, e.Identifier(), updatesChanged)
 	if err != nil {
 		return resp, err
 	}
@@ -336,7 +340,11 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	isCompat := helps.APIKeyModelIsCompat(req)
 	originalTranslated, translated, updatesChanged := helps.TranslateRequestPairWithAPIKeyModelCompatibilityAndUpdateIntent(ctx, opts.Headers, e.cfg, from, to, baseModel, originalPayload, req.Payload, true, isCompat)
 
-	translated, err = helps.ApplyRequestThinking(translated, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged)
+	thinkingFormat := to.String()
+	if strings.EqualFold(e.Identifier(), "glm") {
+		thinkingFormat = "glm"
+	}
+	translated, err = helps.ApplyRequestThinking(translated, req, opts, from.String(), thinkingFormat, e.Identifier(), updatesChanged)
 	if err != nil {
 		return nil, err
 	}
@@ -708,7 +716,11 @@ func (e *OpenAICompatExecutor) CountTokens(ctx context.Context, auth *cliproxyau
 
 	modelForCounting := baseModel
 
-	translated, err := helps.ApplyRequestThinking(translated, req, opts, from.String(), to.String(), e.Identifier(), updatesChanged)
+	thinkingFormat := to.String()
+	if strings.EqualFold(e.Identifier(), "glm") {
+		thinkingFormat = "glm"
+	}
+	translated, err := helps.ApplyRequestThinking(translated, req, opts, from.String(), thinkingFormat, e.Identifier(), updatesChanged)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}

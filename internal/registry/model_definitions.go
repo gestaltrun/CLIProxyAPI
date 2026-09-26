@@ -20,6 +20,14 @@ const (
 	xaiBuiltinVideo15PreviewID         = "grok-imagine-video-1.5-preview"
 )
 
+var glmBuiltinModels = []*ModelInfo{
+	glmBuiltinModel("glm-5-turbo", "GLM-5 Turbo", []string{"high", "max"}),
+	glmBuiltinModel("glm-5.1", "GLM-5.1", []string{"high", "max"}),
+	glmBuiltinModel("glm-5.2", "GLM-5.2", []string{"high", "max"}),
+	glmBuiltinModel("glm-5.3", "GLM-5.3", []string{"low", "high", "max"}),
+	glmBuiltinModel("glm-5.3-flash", "GLM-5.3 Flash", []string{"low", "high", "max"}),
+}
+
 // staticModelsJSON mirrors the top-level structure of models.json.
 type staticModelsJSON struct {
 	Claude      []*ModelInfo `json:"claude"`
@@ -242,6 +250,31 @@ func GetXAIModels() []*ModelInfo {
 	return WithXAIBuiltins(cloneModelInfos(getModels().XAI))
 }
 
+// GetGLMModels returns Coding Plan model definitions that do not depend on models.json.
+func GetGLMModels() []*ModelInfo {
+	return cloneModelInfos(glmBuiltinModels)
+}
+
+// OverlayGLMModelDefinition copies static GLM input and thinking metadata onto a live listing row.
+func OverlayGLMModelDefinition(model *ModelInfo) *ModelInfo {
+	if model == nil {
+		return nil
+	}
+	id := strings.TrimSpace(model.ID)
+	for _, builtin := range glmBuiltinModels {
+		if builtin == nil || builtin.ID != id {
+			continue
+		}
+		overlay := cloneModelInfo(builtin)
+		if displayName := strings.TrimSpace(model.DisplayName); displayName != "" {
+			overlay.DisplayName = displayName
+		}
+		overlay.UserDefined = true
+		return overlay
+	}
+	return model
+}
+
 // WithCodexBuiltins injects hard-coded Codex-only model definitions that should
 // not depend on remote models.json updates. Built-ins replace any matching IDs
 // already present in the provided slice.
@@ -290,6 +323,26 @@ func codexBuiltinImageModelInfo() *ModelInfo {
 		Type:        "openai",
 		DisplayName: "GPT Image 2",
 		Version:     codexBuiltinImageModelID,
+	}
+}
+
+func glmBuiltinModel(id, displayName string, levels []string) *ModelInfo {
+	return &ModelInfo{
+		ID:                        id,
+		Object:                    "model",
+		Created:                   1735689600, // 2025-01-01
+		OwnedBy:                   "zhipu",
+		Type:                      "glm",
+		DisplayName:               displayName,
+		Name:                      id,
+		ContextLength:             202752,
+		MaxCompletionTokens:       32768,
+		SupportedInputModalities:  []string{"text", "image"},
+		SupportedOutputModalities: []string{"text"},
+		Thinking: &ThinkingSupport{
+			ZeroAllowed: true,
+			Levels:      append([]string(nil), levels...),
+		},
 	}
 }
 
@@ -480,6 +533,7 @@ func cloneModelInfos(models []*ModelInfo) []*ModelInfo {
 //   - xai
 //   - devin
 //   - meta
+//   - glm
 func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 	key := strings.ToLower(strings.TrimSpace(channel))
 	switch key {
@@ -505,6 +559,8 @@ func GetStaticModelDefinitionsByChannel(channel string) []*ModelInfo {
 		return GetDevinModels()
 	case "meta", "muse":
 		return GetMetaModels()
+	case "glm":
+		return GetGLMModels()
 	default:
 		return nil
 	}
@@ -550,6 +606,7 @@ func LookupStaticModelInfo(modelID string) *ModelInfo {
 		data.Devin,
 		staticDevinModels,
 		data.Meta,
+		glmBuiltinModels,
 	}
 	for _, models := range allModels {
 		for _, m := range models {
