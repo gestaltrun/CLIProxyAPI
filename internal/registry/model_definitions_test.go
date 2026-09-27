@@ -70,25 +70,38 @@ func TestCodexConfigurationUpdateCapability(t *testing.T) {
 }
 
 func TestGetStaticModelDefinitionsByChannelIncludesGLM(t *testing.T) {
+	want := map[string]struct {
+		contextLength int
+		input         string
+		levels        string
+	}{
+		"glm-5-turbo":   {202752, "text", "high,max"},
+		"glm-5.1":       {1000000, "text", "high,max"},
+		"glm-5.2":       {1000000, "text", "high,max"},
+		"glm-5.3":       {1000000, "text", "low,high,max"},
+		"glm-5.3-flash": {1000000, "text,image", "low,high,max"},
+	}
 	models := GetStaticModelDefinitionsByChannel("glm")
-	if len(models) == 0 {
-		t.Fatal("GetStaticModelDefinitionsByChannel(glm) returned no models")
+	if len(models) != len(want) {
+		t.Fatalf("GetStaticModelDefinitionsByChannel(glm) returned %d models, want %d", len(models), len(want))
 	}
-	found := false
 	for _, model := range models {
-		if model == nil || model.ID != "glm-5.3" {
-			continue
+		expected, ok := want[model.ID]
+		if !ok {
+			t.Fatalf("unexpected GLM model %q", model.ID)
 		}
-		found = true
-		if len(model.SupportedInputModalities) != 2 {
-			t.Fatalf("glm-5.3 input modalities = %#v", model.SupportedInputModalities)
+		if model.ContextLength != expected.contextLength || model.MaxCompletionTokens != 131072 {
+			t.Errorf("%s context_length=%d max_completion_tokens=%d", model.ID, model.ContextLength, model.MaxCompletionTokens)
 		}
-		if model.Thinking == nil || len(model.Thinking.Levels) == 0 {
-			t.Fatalf("glm-5.3 thinking = %#v", model.Thinking)
+		if got := strings.Join(model.SupportedInputModalities, ","); got != expected.input {
+			t.Errorf("%s input modalities = %s, want %s", model.ID, got, expected.input)
 		}
-	}
-	if !found {
-		t.Fatal("GetStaticModelDefinitionsByChannel(glm) missing glm-5.3")
+		if model.Thinking == nil || strings.Join(model.Thinking.Levels, ",") != expected.levels {
+			t.Errorf("%s thinking = %#v, want levels %s", model.ID, model.Thinking, expected.levels)
+		}
+		if model.DefaultReasoningLevel != "max" {
+			t.Errorf("%s default_reasoning_level = %q, want max", model.ID, model.DefaultReasoningLevel)
+		}
 	}
 }
 
@@ -366,5 +379,31 @@ func TestGetDevinModelsFallback(t *testing.T) {
 	}
 	if info.DisplayName != "SWE-2" {
 		t.Errorf("info.DisplayName = %q, want SWE-2", info.DisplayName)
+	}
+}
+
+func TestStaticDefaultReasoningLevelIsASupportedLevel(t *testing.T) {
+	checked := 0
+	for _, channel := range []string{"claude", "gemini", "vertex", "aistudio", "codex", "kimi", "antigravity", "xai", "devin", "meta", "glm"} {
+		for _, model := range GetStaticModelDefinitionsByChannel(channel) {
+			if model == nil || model.DefaultReasoningLevel == "" {
+				continue
+			}
+			checked++
+			supported := false
+			if model.Thinking != nil {
+				for _, level := range model.Thinking.Levels {
+					if level == model.DefaultReasoningLevel {
+						supported = true
+					}
+				}
+			}
+			if !supported {
+				t.Errorf("%s/%s default_reasoning_level %q is not one of its thinking levels", channel, model.ID, model.DefaultReasoningLevel)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no static model declares default_reasoning_level")
 	}
 }

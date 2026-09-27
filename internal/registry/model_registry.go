@@ -70,6 +70,10 @@ type ModelInfo struct {
 	// MaxContextLength is an explicit per-model context window override from configuration.
 	// It is carried internally for Codex client model catalog generation.
 	MaxContextLength int `json:"-"`
+	// MaxContextWindow is the largest context the model accepts when it exceeds ContextLength,
+	// the default window. Zero means the maximum equals ContextLength. Unlike MaxContextLength,
+	// it comes from static model definitions and is serialized.
+	MaxContextWindow int `json:"max_context_window,omitempty"`
 	// MaxCompletionTokens is the maximum completion tokens
 	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`
 	// SupportedParameters lists supported parameters
@@ -92,6 +96,10 @@ type ModelInfo struct {
 	// Thinking holds provider-specific reasoning/thinking budget capabilities.
 	// This is optional and currently used for Gemini thinking budget normalization.
 	Thinking *ThinkingSupport `json:"thinking,omitempty"`
+
+	// DefaultReasoningLevel is the Thinking level the upstream applies when a request sets none.
+	// It is set only where official documentation or a client catalog states the default.
+	DefaultReasoningLevel string `json:"default_reasoning_level,omitempty"`
 
 	// Config holds model-specific runtime overrides loaded from models.json.
 	Config *ModelConfig `json:"config,omitempty"`

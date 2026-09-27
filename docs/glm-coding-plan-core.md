@@ -60,16 +60,27 @@ A static list is not evidence of models granted to a key. If a later implementat
 
 ### Static management definitions
 
-`GET /v0/management/model-definitions/glm` returns the built-in GLM definitions (`glm-5-turbo`, `glm-5.1`, `glm-5.2`, `glm-5.3`, `glm-5.3-flash`) for management clients that label models before a key is enrolled. They carry display metadata and reasoning levels only; `ModelsForAuth` remains the source of models routed for a key.
+`GET /v0/management/model-definitions/glm` returns the built-in GLM definitions for management clients that label models before a key is enrolled; `ModelsForAuth` remains the source of models routed for a key. The overlay applies the same values to discovered IDs that match a built-in definition. Each definition describes the model that serves the ID on Coding Plan, which routes `glm-5.2` and `glm-5.1` to GLM-5.3 and, on the CN site, `glm-5-turbo` to GLM-5.3-Flash:
 
-Every channel of `GET /v0/management/model-definitions/{channel}` adds two integer fields to each model that has a known window:
+| ID | `context_length` | `max_completion_tokens` | Input | Levels | Default |
+| --- | --- | --- | --- | --- | --- |
+| `glm-5.3` | 1000000 | 131072 | text | low, high, max | max |
+| `glm-5.3-flash` | 1000000 | 131072 | text, image | low, high, max | max |
+| `glm-5.2` | 1000000 | 131072 | text | high, max | max |
+| `glm-5.1` | 1000000 | 131072 | text | high, max | max |
+| `glm-5-turbo` | 202752 | 131072 | text | high, max | max |
+
+Sources: [GLM-5.3](https://docs.z.ai/guides/llm/glm-5.3), [GLM-5.3-Flash](https://docs.z.ai/guides/vlm/glm-5.3-flash), [GLM-5.2](https://docs.z.ai/guides/llm/glm-5.2), [GLM-5-Turbo](https://docs.z.ai/guides/llm/glm-5-turbo), [Chat Completion API](https://docs.z.ai/api-reference/llm/chat-completion) (`max_tokens` maximum 131072, `reasoning_effort` default `max`), [Coding Plan overview](https://docs.bigmodel.cn/cn/coding-plan/overview) and [DevPack overview](https://docs.z.ai/devpack/overview) (routing), and [Coding Plan model switching](https://docs.bigmodel.cn/cn/coding-plan/latest-model) (context window `1000000`, image support only on GLM-5.3-Flash). On the CN Coding Plan endpoint, `max_tokens` above 131072 returns error 1210 for every ID, image parts return error 1210 for every ID except `glm-5.3-flash`, and responses for `glm-5.2`/`glm-5.1` and `glm-5-turbo` name `glm-5.3` and `glm-5.3-flash`. `glm-5-turbo` keeps the 200K of its own model page because the international site does not document its routing.
+
+Every channel of `GET /v0/management/model-definitions/{channel}` adds these fields to each model that has the data:
 
 | Field | Meaning | Source |
 | --- | --- | --- |
 | `context_window` | Default context budget a client should plan for | Codex channel: `context_window` from the Codex client catalog. Other channels, and Codex models whose catalog entry omits it: `context_length`. |
-| `max_context_window` | Largest context the model accepts | Codex channel: `max_context_window` from the Codex client catalog. Other channels: `context_length`. Never smaller than `context_window`. |
+| `max_context_window` | Largest context the model accepts | Codex channel: `max_context_window` from the Codex client catalog. Other channels: the static `max_context_window` when a model's maximum exceeds its default (Claude Sonnet 4.6 and Opus 4.6: 1000000), otherwise `context_length`. Never smaller than `context_window`. |
+| `default_reasoning_level` | Thinking level the upstream applies when a request sets none | Codex channel: `default_reasoning_level` from the Codex client catalog when it is one of the model's levels. Other channels: the static value, set only where official documentation states a default. Omitted otherwise. |
 
-For example, Codex `gpt-6-astra` reports `context_window: 272000` and `max_context_window: 872000`; every GLM definition reports `202752` for both. Existing fields such as `context_length` and `max_completion_tokens` are unchanged.
+For example, Codex `gpt-6-astra` reports `context_window: 272000`, `max_context_window: 872000`, and `default_reasoning_level: medium`; Claude `claude-sonnet-4-6` reports `200000`, `1000000`, and `high`. Existing fields such as `context_length` and `max_completion_tokens` are unchanged.
 
 ## Reasoning policy
 

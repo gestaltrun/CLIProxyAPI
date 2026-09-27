@@ -1031,3 +1031,17 @@ func ClientContextWindows(id string) (contextWindow int, maxContextWindow int, o
 	}
 	return contextWindow, maxContextWindow, maxContextWindow > 0
 }
+
+// ClientDefaultReasoningLevel reports the Codex client catalog's default reasoning level for one model.
+// It returns an empty string when the catalog has no template for the model or the template omits the default.
+func ClientDefaultReasoningLevel(id string) string {
+	templates, _, err := loadCodexClientModelTemplates()
+	if err != nil {
+		return ""
+	}
+	template, found := templates[codexClientMetadataModelID(id)]
+	if !found {
+		return ""
+	}
+	return strings.TrimSpace(stringModelValue(template, "default_reasoning_level"))
+}
