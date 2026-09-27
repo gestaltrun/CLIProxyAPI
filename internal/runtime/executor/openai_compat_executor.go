@@ -52,6 +52,15 @@ func NewOpenAICompatExecutor(provider string, cfg *config.Config) *OpenAICompatE
 // Identifier implements cliproxyauth.ProviderExecutor.
 func (e *OpenAICompatExecutor) Identifier() string { return e.provider }
 
+// thinkingFormat names the thinking applier for requests translated to the target format.
+// The GLM provider uses its own applier; other providers use the target format.
+func (e *OpenAICompatExecutor) thinkingFormat(to sdktranslator.Format) string {
+	if strings.EqualFold(e.Identifier(), "glm") {
+		return "glm"
+	}
+	return to.String()
+}
+
 // PrepareRequest injects OpenAI-compatible credentials into the outgoing HTTP request.
 func (e *OpenAICompatExecutor) PrepareRequest(req *http.Request, auth *cliproxyauth.Auth) error {
 	if req == nil {
@@ -118,11 +127,7 @@ func (e *OpenAICompatExecutor) Execute(ctx context.Context, auth *cliproxyauth.A
 	isCompat := helps.APIKeyModelIsCompat(req)
 	originalTranslated, translated, updatesChanged := helps.TranslateRequestPairWithAPIKeyModelCompatibilityAndUpdateIntent(ctx, opts.Headers, e.cfg, from, to, baseModel, originalPayload, req.Payload, opts.Stream, isCompat)
 
-	thinkingFormat := to.String()
-	if strings.EqualFold(e.Identifier(), "glm") {
-		thinkingFormat = "glm"
-	}
-	translated, err = helps.ApplyRequestThinking(translated, req, opts, from.String(), thinkingFormat, e.Identifier(), updatesChanged)
+	translated, err = helps.ApplyRequestThinking(translated, req, opts, from.String(), e.thinkingFormat(to), e.Identifier(), updatesChanged)
 	if err != nil {
 		return resp, err
 	}
@@ -340,11 +345,7 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
 	isCompat := helps.APIKeyModelIsCompat(req)
 	originalTranslated, translated, updatesChanged := helps.TranslateRequestPairWithAPIKeyModelCompatibilityAndUpdateIntent(ctx, opts.Headers, e.cfg, from, to, baseModel, originalPayload, req.Payload, true, isCompat)
 
-	thinkingFormat := to.String()
-	if strings.EqualFold(e.Identifier(), "glm") {
-		thinkingFormat = "glm"
-	}
-	translated, err = helps.ApplyRequestThinking(translated, req, opts, from.String(), thinkingFormat, e.Identifier(), updatesChanged)
+	translated, err = helps.ApplyRequestThinking(translated, req, opts, from.String(), e.thinkingFormat(to), e.Identifier(), updatesChanged)
 	if err != nil {
 		return nil, err
 	}
@@ -716,11 +717,7 @@ func (e *OpenAICompatExecutor) CountTokens(ctx context.Context, auth *cliproxyau
 
 	modelForCounting := baseModel
 
-	thinkingFormat := to.String()
-	if strings.EqualFold(e.Identifier(), "glm") {
-		thinkingFormat = "glm"
-	}
-	translated, err := helps.ApplyRequestThinking(translated, req, opts, from.String(), thinkingFormat, e.Identifier(), updatesChanged)
+	translated, err := helps.ApplyRequestThinking(translated, req, opts, from.String(), e.thinkingFormat(to), e.Identifier(), updatesChanged)
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
