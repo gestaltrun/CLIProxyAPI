@@ -15,8 +15,14 @@ import (
 //
 // Every model carries context_window (the default context budget) and max_context_window
 // (the largest context the model accepts) when either is known. Codex models take both from
-// the Codex client catalog, falling back to context_length for a missing default; other models
-// report context_length for both.
+// the Codex client catalog, falling back to context_length for a missing default. Other models
+// report context_length as context_window and the registry max_context_window, or
+// context_length when the registry has no separate maximum.
+//
+// default_reasoning_level is the Thinking level the upstream applies when a request sets none.
+// Codex models take it from the Codex client catalog when the level is one of the model's
+// Thinking levels; other models report the registry value, which is set only where official
+// documentation states the default. Models without a known default omit the field.
 func (h *Handler) GetStaticModelDefinitions(c *gin.Context) {
 	channel := strings.TrimSpace(c.Param("channel"))
 	if channel == "" {
@@ -65,6 +71,9 @@ func modelDefinitionEntry(model *registry.ModelInfo, codexChannel bool) (map[str
 		return nil, err
 	}
 	contextWindow, maxContextWindow := model.ContextLength, model.ContextLength
+	if model.MaxContextWindow > 0 {
+		maxContextWindow = model.MaxContextWindow
+	}
 	if codexChannel {
 		if clientWindow, clientMax, ok := codexmodels.ClientContextWindows(model.ID); ok {
 			if clientWindow > 0 {
@@ -76,6 +85,11 @@ func modelDefinitionEntry(model *registry.ModelInfo, codexChannel bool) (map[str
 	if maxContextWindow < contextWindow {
 		maxContextWindow = contextWindow
 	}
+	if codexChannel {
+		if level := codexmodels.ClientDefaultReasoningLevel(model.ID); level != "" && modelSupportsLevel(model, level) {
+			entry["default_reasoning_level"] = level
+		}
+	}
 	if contextWindow > 0 {
 		entry["context_window"] = contextWindow
 	}
@@ -83,4 +97,16 @@ func modelDefinitionEntry(model *registry.ModelInfo, codexChannel bool) (map[str
 		entry["max_context_window"] = maxContextWindow
 	}
 	return entry, nil
+}
+
+func modelSupportsLevel(model *registry.ModelInfo, level string) bool {
+	if model == nil || model.Thinking == nil {
+		return false
+	}
+	for _, candidate := range model.Thinking.Levels {
+		if strings.EqualFold(candidate, level) {
+			return true
+		}
+	}
+	return false
 }

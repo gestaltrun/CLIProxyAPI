@@ -20,13 +20,35 @@ const (
 	xaiBuiltinVideo15PreviewID         = "grok-imagine-video-1.5-preview"
 )
 
+// GLM Coding Plan limits describe the model that serves each ID. Coding Plan routes
+// glm-5.2 and glm-5.1 to GLM-5.3 and, on the CN site, glm-5-turbo to GLM-5.3-Flash
+// (https://docs.bigmodel.cn/cn/coding-plan/overview, https://docs.z.ai/devpack/overview).
+// GLM-5.3 and GLM-5.3-Flash accept a 1M context (https://docs.z.ai/guides/llm/glm-5.3,
+// https://docs.z.ai/guides/vlm/glm-5.3-flash); the Coding Plan OpenAI-compatible setup uses
+// 1000000 (https://docs.bigmodel.cn/cn/coding-plan/latest-model). glm-5-turbo keeps the
+// 200K of its own model page because the international site does not document its routing.
+// Every model accepts max_tokens up to 131072, and reasoning_effort defaults to max
+// (https://docs.z.ai/api-reference/llm/chat-completion). Only GLM-5.3-Flash accepts images;
+// the Coding Plan endpoint rejects image parts for the other IDs.
 var glmBuiltinModels = []*ModelInfo{
-	glmBuiltinModel("glm-5-turbo", "GLM-5 Turbo", []string{"high", "max"}),
-	glmBuiltinModel("glm-5.1", "GLM-5.1", []string{"high", "max"}),
-	glmBuiltinModel("glm-5.2", "GLM-5.2", []string{"high", "max"}),
-	glmBuiltinModel("glm-5.3", "GLM-5.3", []string{"low", "high", "max"}),
-	glmBuiltinModel("glm-5.3-flash", "GLM-5.3 Flash", []string{"low", "high", "max"}),
+	glmBuiltinModel("glm-5-turbo", "GLM-5 Turbo", glmContextStandard, glmInputText, []string{"high", "max"}),
+	glmBuiltinModel("glm-5.1", "GLM-5.1", glmContext1M, glmInputText, []string{"high", "max"}),
+	glmBuiltinModel("glm-5.2", "GLM-5.2", glmContext1M, glmInputText, []string{"high", "max"}),
+	glmBuiltinModel("glm-5.3", "GLM-5.3", glmContext1M, glmInputText, []string{"low", "high", "max"}),
+	glmBuiltinModel("glm-5.3-flash", "GLM-5.3 Flash", glmContext1M, glmInputTextImage, []string{"low", "high", "max"}),
 }
+
+const (
+	glmContextStandard       = 202752
+	glmContext1M             = 1000000
+	glmMaxCompletionTokens   = 131072
+	glmDefaultReasoningLevel = "max"
+)
+
+var (
+	glmInputText      = []string{"text"}
+	glmInputTextImage = []string{"text", "image"}
+)
 
 // staticModelsJSON mirrors the top-level structure of models.json.
 type staticModelsJSON struct {
@@ -326,7 +348,7 @@ func codexBuiltinImageModelInfo() *ModelInfo {
 	}
 }
 
-func glmBuiltinModel(id, displayName string, levels []string) *ModelInfo {
+func glmBuiltinModel(id, displayName string, contextLength int, inputModalities, levels []string) *ModelInfo {
 	return &ModelInfo{
 		ID:                        id,
 		Object:                    "model",
@@ -335,14 +357,15 @@ func glmBuiltinModel(id, displayName string, levels []string) *ModelInfo {
 		Type:                      "glm",
 		DisplayName:               displayName,
 		Name:                      id,
-		ContextLength:             202752,
-		MaxCompletionTokens:       32768,
-		SupportedInputModalities:  []string{"text", "image"},
+		ContextLength:             contextLength,
+		MaxCompletionTokens:       glmMaxCompletionTokens,
+		SupportedInputModalities:  append([]string(nil), inputModalities...),
 		SupportedOutputModalities: []string{"text"},
 		Thinking: &ThinkingSupport{
 			ZeroAllowed: true,
 			Levels:      append([]string(nil), levels...),
 		},
+		DefaultReasoningLevel: glmDefaultReasoningLevel,
 	}
 }
 

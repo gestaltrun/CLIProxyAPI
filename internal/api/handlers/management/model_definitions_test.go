@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 )
 
 func getModelDefinitions(t *testing.T, channel string) map[string]map[string]any {
@@ -51,30 +53,120 @@ func TestModelDefinitionsCodexReportDefaultAndMaximumContext(t *testing.T) {
 	}
 }
 
-func TestModelDefinitionsWithoutClientCatalogRepeatContextLength(t *testing.T) {
-	checked := 0
-	for id, model := range getModelDefinitions(t, "claude") {
-		length, ok := model["context_length"].(float64)
-		if !ok || length <= 0 {
-			continue
+func TestModelDefinitionsWithoutClientCatalogUseRegistryWindows(t *testing.T) {
+	for _, channel := range []string{"claude", "xai", "kimi", "glm"} {
+		entries := getModelDefinitions(t, channel)
+		checked := 0
+		for _, model := range registry.GetStaticModelDefinitionsByChannel(channel) {
+			if model == nil || model.ContextLength <= 0 {
+				continue
+			}
+			checked++
+			entry := entries[model.ID]
+			wantMax := model.ContextLength
+			if model.MaxContextWindow > wantMax {
+				wantMax = model.MaxContextWindow
+			}
+			if entry["context_window"] != float64(model.ContextLength) || entry["max_context_window"] != float64(wantMax) {
+				t.Errorf("%s/%s: context_window=%#v max_context_window=%#v, want %d / %d", channel, model.ID, entry["context_window"], entry["max_context_window"], model.ContextLength, wantMax)
+			}
 		}
-		checked++
-		if model["context_window"] != length || model["max_context_window"] != length {
-			t.Fatalf("%s: context_window=%#v max_context_window=%#v, want both %v", id, model["context_window"], model["max_context_window"], length)
+		if checked == 0 {
+			t.Fatalf("%s definitions carry no context_length", channel)
 		}
-	}
-	if checked == 0 {
-		t.Fatal("claude definitions carry no context_length")
 	}
 }
 
-func TestModelDefinitionsGLMReportContextWindows(t *testing.T) {
-	models := getModelDefinitions(t, "glm")
-	model, ok := models["glm-5.3"]
-	if !ok {
-		t.Fatal("glm definitions omit glm-5.3")
+func TestModelDefinitionsReportCorrectedCapabilities(t *testing.T) {
+	type want struct {
+		contextWindow  float64
+		maxContext     float64
+		maxCompletion  float64
+		input          string
+		levels         string
+		defaultLevel   string
+		omitDefault    bool
+		skipCompletion bool
 	}
-	if model["context_window"] != float64(202752) || model["max_context_window"] != float64(202752) {
-		t.Fatalf("context_window=%#v max_context_window=%#v, want both 202752", model["context_window"], model["max_context_window"])
+	cases := []struct {
+		channel string
+		id      string
+		want    want
+	}{
+		{"glm", "glm-5.3", want{contextWindow: 1000000, maxCompletion: 131072, input: "text", levels: "low,high,max", defaultLevel: "max"}},
+		{"glm", "glm-5.3-flash", want{contextWindow: 1000000, maxCompletion: 131072, input: "text,image", levels: "low,high,max", defaultLevel: "max"}},
+		{"glm", "glm-5.2", want{contextWindow: 1000000, maxCompletion: 131072, input: "text", levels: "high,max", defaultLevel: "max"}},
+		{"glm", "glm-5.1", want{contextWindow: 1000000, maxCompletion: 131072, input: "text", levels: "high,max", defaultLevel: "max"}},
+		{"glm", "glm-5-turbo", want{contextWindow: 202752, maxCompletion: 131072, input: "text", levels: "high,max", defaultLevel: "max"}},
+		{"claude", "claude-sonnet-4-6", want{contextWindow: 200000, maxContext: 1000000, maxCompletion: 128000, input: "text,image", levels: "low,medium,high,max", defaultLevel: "high"}},
+		{"claude", "claude-opus-4-6", want{contextWindow: 200000, maxContext: 1000000, maxCompletion: 128000, input: "text,image", levels: "low,medium,high,max", defaultLevel: "high"}},
+		{"claude", "claude-opus-4-7", want{contextWindow: 1000000, maxCompletion: 128000, input: "text,image", levels: "low,medium,high,xhigh,max", defaultLevel: "high"}},
+		{"claude", "claude-opus-5-5", want{contextWindow: 1000000, maxCompletion: 128000, input: "text,image", levels: "low,medium,high,xhigh,max", defaultLevel: "medium"}},
+		{"claude", "claude-opus-4-5-20251101", want{contextWindow: 200000, maxCompletion: 64000, input: "text,image", omitDefault: true}},
+		{"xai", "grok-4.20-0309-reasoning", want{contextWindow: 1000000, maxCompletion: 65536, input: "text,image", omitDefault: true}},
+		{"xai", "grok-4.20-0309-non-reasoning", want{contextWindow: 1000000, maxCompletion: 65536, input: "text,image", omitDefault: true}},
+		{"xai", "grok-4.20-multi-agent-0309", want{contextWindow: 1000000, maxCompletion: 65536, input: "text,image", levels: "low,medium,high", omitDefault: true}},
+		{"xai", "grok-4.3", want{contextWindow: 1000000, maxCompletion: 65536, input: "text,image", levels: "none,low,medium,high,xhigh", defaultLevel: "low"}},
+		{"xai", "grok-4.7", want{contextWindow: 500000, maxCompletion: 500000, input: "text,image", levels: "low,medium,high,xhigh", defaultLevel: "high"}},
+		{"antigravity", "gemini-3.1-flash-image", want{contextWindow: 131072, maxCompletion: 32768, input: "text,image", levels: "minimal,high", omitDefault: true}},
+		{"kimi", "kimi-k2.7-code", want{contextWindow: 1048576, maxCompletion: 65536, input: "text,image,video", levels: "low,high,max", defaultLevel: "max"}},
+		{"kimi", "kimi-k3", want{contextWindow: 1048576, maxCompletion: 65536, input: "text,image,video", levels: "low,high,max", defaultLevel: "high"}},
+		{"kimi", "kimi-k2.7-code-highspeed", want{contextWindow: 262144, maxCompletion: 65536, input: "text,image,video", levels: "low,high", omitDefault: true}},
+		{"codex", "gpt-6-astra", want{contextWindow: 272000, maxContext: 872000, maxCompletion: 128000, input: "text,image", defaultLevel: "medium"}},
+		{"codex", "gpt-5.6-sol", want{contextWindow: 272000, maxContext: 872000, skipCompletion: true, input: "text,image", defaultLevel: "low"}},
 	}
+	byChannel := map[string]map[string]map[string]any{}
+	for _, tc := range cases {
+		t.Run(tc.channel+"/"+tc.id, func(t *testing.T) {
+			if byChannel[tc.channel] == nil {
+				byChannel[tc.channel] = getModelDefinitions(t, tc.channel)
+			}
+			model, ok := byChannel[tc.channel][tc.id]
+			if !ok {
+				t.Fatalf("%s definitions omit %s", tc.channel, tc.id)
+			}
+			if got := model["context_window"]; got != tc.want.contextWindow {
+				t.Errorf("context_window = %#v, want %v", got, tc.want.contextWindow)
+			}
+			wantMax := tc.want.maxContext
+			if wantMax == 0 {
+				wantMax = tc.want.contextWindow
+			}
+			if got := model["max_context_window"]; got != wantMax {
+				t.Errorf("max_context_window = %#v, want %v", got, wantMax)
+			}
+			if !tc.want.skipCompletion {
+				if got := model["max_completion_tokens"]; got != tc.want.maxCompletion {
+					t.Errorf("max_completion_tokens = %#v, want %v", got, tc.want.maxCompletion)
+				}
+			}
+			if got := joinStrings(model["supportedInputModalities"]); got != tc.want.input {
+				t.Errorf("supportedInputModalities = %s, want %s", got, tc.want.input)
+			}
+			if tc.want.levels != "" {
+				thinking, _ := model["thinking"].(map[string]any)
+				if got := joinStrings(thinking["levels"]); got != tc.want.levels {
+					t.Errorf("thinking.levels = %s, want %s", got, tc.want.levels)
+				}
+			}
+			got, present := model["default_reasoning_level"]
+			if tc.want.omitDefault {
+				if present {
+					t.Errorf("default_reasoning_level = %#v, want omitted", got)
+				}
+			} else if got != tc.want.defaultLevel {
+				t.Errorf("default_reasoning_level = %#v, want %q", got, tc.want.defaultLevel)
+			}
+		})
+	}
+}
+
+func joinStrings(value any) string {
+	items, _ := value.([]any)
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		text, _ := item.(string)
+		parts = append(parts, text)
+	}
+	return strings.Join(parts, ",")
 }
