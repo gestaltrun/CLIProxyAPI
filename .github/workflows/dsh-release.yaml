@@ -39,6 +39,18 @@
 # CSC_LINK or either variable is missing. Only a manual
 # run with unsigned=true may skip signing; such a run uploads workflow artifacts and never
 # publishes a release.
+#
+# The Darwin jobs run in the GitHub environment `dsh-signing`, which holds the signing
+# settings. A maintainer configures it once under Settings > Environments:
+# 1. Create the environment `dsh-signing`.
+# 2. Add environment secrets CSC_LINK and CSC_KEY_PASSWORD (omit CSC_KEY_PASSWORD for an
+#    empty export password) and environment variables DESKTOP_RELEASE_MACOS_SIGNING_IDENTITY
+#    and DESKTOP_RELEASE_MACOS_TEAM_ID, then delete the repository-level copies.
+# 3. Under Deployment branches and tags choose "Selected branches and tags" and add the
+#    branch rule `main` and the tag rule `v*-glm*`.
+# GitHub evaluates those rules against the ref the run starts from: the pushed tag, or the
+# branch a manual run is dispatched from (not the `target` input). Scripts in the Darwin jobs
+# come from that ref's commit; the `target` checkout supplies only the Go sources.
 name: dsh-release
 
 on:
@@ -144,8 +156,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { platform: darwin, arch: arm64, runner: macos-15, filename: cli-proxy-api }
-          - { platform: darwin, arch: x64, runner: macos-15, filename: cli-proxy-api }
           - { platform: linux, arch: arm64, runner: ubuntu-latest, filename: cli-proxy-api }
           - { platform: linux, arch: x64, runner: ubuntu-latest, filename: cli-proxy-api }
           - { platform: win32, arch: x64, runner: ubuntu-latest, filename: cli-proxy-api.exe }
@@ -160,6 +170,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ needs.resolve.outputs.source_sha }}
+          persist-credentials: false
       - uses: actions/setup-go@v6
         with:
           go-version: ${{ env.GO_VERSION }}
@@ -168,8 +179,63 @@ jobs:
         shell: bash
         run: python3 .github/scripts/dsh_archive.py build --platform "$PLATFORM" --arch "$ARCH" --version "$VERSION" --out "dist/bin"
 
+      - name: Package and verify archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/dsh_archive.py package --platform "$PLATFORM" --arch "$ARCH" --version "$VERSION" \
+            --source-sha "$SOURCE_SHA" --binary "dist/bin/$FILENAME" --mtime "$SOURCE_EPOCH" --out dist/archive
+          python3 .github/scripts/dsh_archive.py verify --platform "$PLATFORM" --arch "$ARCH" --source-sha "$SOURCE_SHA" \
+            --archive "dist/archive/CLIProxyAPI_${VERSION}_dsh_${PLATFORM}-${ARCH}.tar.gz"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dsh-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/archive/CLIProxyAPI_*_dsh_*.tar.gz
+          if-no-files-found: error
+
+  build-darwin:
+    name: build ${{ matrix.platform }}-${{ matrix.arch }}
+    needs: resolve
+    # Signing secrets and variables live in this environment; its deployment rules admit only
+    # main and v*-glm* refs.
+    environment: dsh-signing
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: darwin, arch: arm64, runner: macos-15, filename: cli-proxy-api }
+          - { platform: darwin, arch: x64, runner: macos-15, filename: cli-proxy-api }
+    env:
+      PLATFORM: ${{ matrix.platform }}
+      ARCH: ${{ matrix.arch }}
+      FILENAME: ${{ matrix.filename }}
+      VERSION: ${{ needs.resolve.outputs.version }}
+      SOURCE_SHA: ${{ needs.resolve.outputs.source_sha }}
+      SOURCE_EPOCH: ${{ needs.resolve.outputs.source_epoch }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve.outputs.source_sha }}
+          persist-credentials: false
+      # Scripts that run in this job come from the workflow's own commit, not from the
+      # manually selected target, so a target branch cannot run code next to the secrets.
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          path: .dsh-tools
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - name: Build binary
+        shell: bash
+        run: python3 .dsh-tools/.github/scripts/dsh_archive.py build --platform "$PLATFORM" --arch "$ARCH" --version "$VERSION" --out "dist/bin"
+
       - name: Sign Darwin binary
-        if: matrix.platform == 'darwin' && needs.resolve.outputs.signed == 'true'
+        if: needs.resolve.outputs.signed == 'true'
         shell: bash
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -212,7 +278,7 @@ jobs:
             # security import rejects some empty-password PKCS#12 files; re-wrap with a temporary password.
             rewrap_password="$(openssl rand -base64 32)"
             echo "::add-mask::$rewrap_password"
-            DSH_P12_PASSWORD="$rewrap_password" bash .github/scripts/dsh-rewrap-p12.sh "$work/certificate.p12" "$work/rewrapped.p12"
+            DSH_P12_PASSWORD="$rewrap_password" bash .dsh-tools/.github/scripts/dsh-rewrap-p12.sh "$work/certificate.p12" "$work/rewrapped.p12"
             rm -f "$work/certificate.p12"
             if ! security import "$work/rewrapped.p12" -k "$keychain" -P "$rewrap_password" -T /usr/bin/codesign >/dev/null; then
               echo "security import rejected the re-wrapped CSC_LINK certificate; check that CSC_LINK holds the Developer ID Application certificate and its private key." >&2
@@ -237,9 +303,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 .github/scripts/dsh_archive.py package --platform "$PLATFORM" --arch "$ARCH" --version "$VERSION" \
+          python3 .dsh-tools/.github/scripts/dsh_archive.py package --platform "$PLATFORM" --arch "$ARCH" --version "$VERSION" \
             --source-sha "$SOURCE_SHA" --binary "dist/bin/$FILENAME" --mtime "$SOURCE_EPOCH" --out dist/archive
-          python3 .github/scripts/dsh_archive.py verify --platform "$PLATFORM" --arch "$ARCH" --source-sha "$SOURCE_SHA" \
+          python3 .dsh-tools/.github/scripts/dsh_archive.py verify --platform "$PLATFORM" --arch "$ARCH" --source-sha "$SOURCE_SHA" \
             --archive "dist/archive/CLIProxyAPI_${VERSION}_dsh_${PLATFORM}-${ARCH}.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
@@ -248,7 +314,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [resolve, build]
+    needs: [resolve, build, build-darwin]
     runs-on: ubuntu-latest
     permissions:
       contents: write
