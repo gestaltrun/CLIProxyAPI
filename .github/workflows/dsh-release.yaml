@@ -8,9 +8,11 @@
 #   archives verify, the publish job creates the release with `gh release create --target
 #   <sourceSHA>`, and GitHub creates the tag on that commit server-side. A tag created with
 #   GITHUB_TOKEN does not start another workflow run.
-# Either way, an existing release for the tag is reused and assets are uploaded with
-# --clobber; a new release is created as a draft, filled, then published, so a published
-# release always lists all assets. The publish job refuses to continue if the tag points at
+# Either way, a new release is created as a draft, filled, then published, so a published
+# release always lists all assets. A draft left by an interrupted run is refilled with
+# --clobber and published. A published release is never modified in place: consumers pin its
+# assets by sha256, so identical assets are skipped, missing ones are added, and any asset
+# that differs (for example a re-signed Darwin binary) fails the run. The publish job refuses to continue if the tag points at
 # a commit other than sourceSHA.
 #
 # Each CLIProxyAPI_<version>_dsh_<platform>-<arch>.tar.gz holds the engine binary, LICENSE,
@@ -305,9 +307,38 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" --draft --target "$SOURCE_SHA" --title "$TAG" --notes-file "$notes"
           fi
-          gh release upload "$TAG" "${assets[@]}" --clobber
-          # A draft left by an interrupted run is published here as well.
           if [[ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" == "true" ]]; then
+            # A draft (new, or left by an interrupted run) is not consumed yet; replace its assets.
+            gh release upload "$TAG" "${assets[@]}" --clobber
             gh release edit "$TAG" --target "$SOURCE_SHA" --draft=false
+          else
+            # Consumers pin published assets by digest, and re-signing changes Darwin digests.
+            # Never replace a published asset: skip identical ones, add missing ones, and fail
+            # when any differs.
+            existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            published="$(mktemp -d)"
+            missing=()
+            changed=()
+            for asset in "${assets[@]}"; do
+              name="$(basename "$asset")"
+              if ! grep -Fxq "$name" <<<"$existing"; then
+                missing+=("$asset")
+                continue
+              fi
+              gh release download "$TAG" --pattern "$name" --dir "$published" --clobber
+              if [[ "$(sha256sum < "$published/$name")" == "$(sha256sum < "$asset")" ]]; then
+                echo "Published $name is identical; skipping."
+              else
+                changed+=("$name")
+              fi
+            done
+            if [[ ${#changed[@]} -gt 0 ]]; then
+              printf 'Release %s is published and these assets differ from this build: %s\n' "$TAG" "${changed[*]}" >&2
+              echo "Published assets are pinned by digest and are never replaced; release a new tag instead." >&2
+              exit 1
+            fi
+            if [[ ${#missing[@]} -gt 0 ]]; then
+              gh release upload "$TAG" "${missing[@]}"
+            fi
           fi
           check_tag || { echo "tag $TAG was not created" >&2; exit 1; }
