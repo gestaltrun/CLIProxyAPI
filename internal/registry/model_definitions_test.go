@@ -429,3 +429,57 @@ func TestStaticDefaultReasoningLevelIsASupportedLevel(t *testing.T) {
 		t.Fatal("no static model declares default_reasoning_level")
 	}
 }
+
+func TestSharedModelCapabilityAdjudications(t *testing.T) {
+	must := func(channel, id string) *ModelInfo {
+		t.Helper()
+		model := LookupStaticModelInfoByChannel(id, channel)
+		if model == nil {
+			t.Fatalf("%s/%s missing", channel, id)
+		}
+		return model
+	}
+
+	sonnet := must("claude", "claude-sonnet-4-6")
+	if sonnet.MaxCompletionTokens != 128000 || sonnet.ContextLength != 200000 || sonnet.MaxContextWindow != 1000000 {
+		t.Errorf("claude-sonnet-4-6 tokens = %d/%d/%d, want 128000 completion, 200000 default, 1000000 max window",
+			sonnet.MaxCompletionTokens, sonnet.ContextLength, sonnet.MaxContextWindow)
+	}
+
+	for _, id := range []string{"grok-4.20-0309-reasoning", "grok-4.20-0309-non-reasoning", "grok-4.20-multi-agent-0309"} {
+		model := must("xai", id)
+		if model.ContextLength != 1000000 {
+			t.Errorf("%s context_length = %d, want 1000000", id, model.ContextLength)
+		}
+	}
+
+	grok43 := must("xai", "grok-4.3")
+	if grok43.Thinking == nil || strings.Join(grok43.Thinking.Levels, ",") != "none,low,medium,high" {
+		t.Errorf("grok-4.3 levels = %#v, want none,low,medium,high", grok43.Thinking)
+	}
+
+	vertexImage := must("vertex", "gemini-3.1-flash-image")
+	if vertexImage.InputTokenLimit != 131072 || vertexImage.OutputTokenLimit != 32768 {
+		t.Errorf("vertex gemini-3.1-flash-image input/output = %d/%d, want 131072/32768",
+			vertexImage.InputTokenLimit, vertexImage.OutputTokenLimit)
+	}
+	antigravityImage := must("antigravity", "gemini-3.1-flash-image")
+	if antigravityImage.ContextLength != 131072 || antigravityImage.MaxCompletionTokens != 32768 {
+		t.Errorf("antigravity gemini-3.1-flash-image context/completion = %d/%d, want 131072/32768",
+			antigravityImage.ContextLength, antigravityImage.MaxCompletionTokens)
+	}
+
+	kimiCode := must("kimi", "kimi-k2.7-code")
+	if kimiCode.ContextLength != 262144 || kimiCode.DefaultReasoningLevel != "" {
+		t.Errorf("kimi-k2.7-code context/default = %d/%q, want 262144 and omitted default",
+			kimiCode.ContextLength, kimiCode.DefaultReasoningLevel)
+	}
+	if kimiCode.Thinking == nil || strings.Join(kimiCode.Thinking.Levels, ",") != "low,high" {
+		t.Errorf("kimi-k2.7-code levels = %#v, want low,high", kimiCode.Thinking)
+	}
+
+	glm := must("glm", "glm-5.3")
+	if glm.ContextLength != 1000000 || glm.MaxCompletionTokens != 131072 || glm.DefaultReasoningLevel != "max" {
+		t.Errorf("glm-5.3 drifted: context=%d completion=%d default=%q", glm.ContextLength, glm.MaxCompletionTokens, glm.DefaultReasoningLevel)
+	}
+}

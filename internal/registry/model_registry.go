@@ -67,12 +67,13 @@ type ModelInfo struct {
 	SupportedGenerationMethods []string `json:"supportedGenerationMethods,omitempty"`
 	// ContextLength is the context window size
 	ContextLength int `json:"context_length,omitempty"`
-	// MaxContextLength is an explicit per-model context window override from configuration.
-	// It is carried internally for Codex client model catalog generation.
+	// MaxContextLength is an operator-configured context override (OAuthSettings /
+	// config models). It is not the vendor-documented maximum and is not serialized
+	// on model-definitions; Codex catalog generation reads it internally.
 	MaxContextLength int `json:"-"`
-	// MaxContextWindow is the largest context the model accepts when it exceeds ContextLength,
-	// the default window. Zero means the maximum equals ContextLength. Unlike MaxContextLength,
-	// it comes from static model definitions and is serialized.
+	// MaxContextWindow is the vendor-documented largest context when it exceeds
+	// ContextLength (the default window). Zero means the maximum equals ContextLength.
+	// Unlike MaxContextLength, it comes from static model definitions and is serialized.
 	MaxContextWindow int `json:"max_context_window,omitempty"`
 	// MaxCompletionTokens is the maximum completion tokens
 	MaxCompletionTokens int `json:"max_completion_tokens,omitempty"`

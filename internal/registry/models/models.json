@@ -1338,8 +1338,8 @@
       "name": "models/gemini-3.1-flash-image",
       "version": "3.1",
       "description": "Gemini 3.1 Flash Image",
-      "inputTokenLimit": 1048576,
-      "outputTokenLimit": 65536,
+      "inputTokenLimit": 131072,
+      "outputTokenLimit": 32768,
       "supportedGenerationMethods": [
         "generateContent",
         "countTokens",
@@ -3836,17 +3836,15 @@
       "type": "kimi",
       "display_name": "Kimi K2.7 Code",
       "description": "Kimi K2.7 Code - Moonshot AI's latest coding-focused model",
-      "context_length": 1048576,
+      "context_length": 262144,
       "max_completion_tokens": 65536,
       "thinking": {
         "zero_allowed": false,
         "levels": [
           "low",
-          "high",
-          "max"
+          "high"
         ]
       },
-      "default_reasoning_level": "max",
       "supportedInputModalities": [
         "text",
         "image",
@@ -4575,8 +4573,7 @@
           "none",
           "low",
           "medium",
-          "high",
-          "xhigh"
+          "high"
         ]
       },
       "default_reasoning_level": "low",

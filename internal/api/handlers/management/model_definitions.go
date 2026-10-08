@@ -14,10 +14,12 @@ import (
 // Channel is provided via path param (:channel) or query param (?channel=...).
 //
 // Every model carries context_window (the default context budget) and max_context_window
-// (the largest context the model accepts) when either is known. Codex models take both from
-// the Codex client catalog, falling back to context_length for a missing default. Other models
-// report context_length as context_window and the registry max_context_window, or
-// context_length when the registry has no separate maximum.
+// (the vendor-documented largest context) when either is known. These come from ModelInfo
+// ContextLength / MaxContextWindow, not from MaxContextLength (a config override used only
+// for Codex catalog generation). Codex models take both from the Codex client catalog,
+// falling back to context_length for a missing default. Other models report context_length
+// as context_window and the registry max_context_window, or context_length when the
+// registry has no separate maximum.
 //
 // default_reasoning_level is the Thinking level the upstream applies when a request sets none.
 // Codex models take it from the Codex client catalog when the level is one of the model's
