@@ -105,7 +105,20 @@ The quota parser consumes `data.limits` entries:
 
 A successful snapshot records both windows when present, the plan level when present, observation time, and reset times. A 401 or 403 records invalid current credential observation without deleting the last successful snapshot; retained values are explicitly stale. Missing or malformed windows do not become zero usage.
 
-Quota polling is observation-only. Usage-endpoint authentication and quota percentage do not modify `Auth.Unavailable`, `Quota.Exceeded`, cooldown deadlines, or inference status. The inference response path and existing scheduler remain the only authorities for request eligibility because a key may be allowed to infer while lacking permission to read the usage endpoint. The management API exposes observation status, credential observation, freshness, and retained stale values for diagnosis. `GET /v0/management/auth-files` includes each GLM file's `auth_index` and quota envelope. `POST /v0/management/auth-files/quota?name=` probes one file-backed credential on demand and returns the same envelope.
+Quota polling is observation-only. Usage-endpoint authentication and quota percentage do not modify `Auth.Unavailable`, `Quota.Exceeded`, cooldown deadlines, or inference status. The inference response path and existing scheduler remain the only authorities for request eligibility because a key may be allowed to infer while lacking permission to read the usage endpoint. The management API exposes observation status, credential observation, freshness, and retained stale values for diagnosis.
+
+### Management API naming (quota probe)
+
+Keep the v0 auth-files probe. Upstream v8 removed `/credentials/quota/*`; this fork does not revive that path.
+
+| Surface | Path / shape |
+|---|---|
+| List | `GET /v0/management/auth-files` includes each GLM file's `auth_index` and quota envelope |
+| On-demand probe | `POST /v0/management/auth-files/quota?name=` |
+| Envelope | `{ "observed_at": <RFC3339>, "signals": { ... } }` |
+| Signal keys | `GLM-Quota-Status`, `GLM-Credential-Valid`, `GLM-Quota-Last-Success-At`, `GLM-Plan-Level`, `GLM-Quota-5h-Used-Percent`, `GLM-Quota-5h-Reset-At`, `GLM-Quota-Weekly-Used-Percent`, `GLM-Quota-Weekly-Reset-At`, `GLM-Quota-Error` |
+
+`GLM-Plan-Level` and the window/error keys are omitted when the snapshot has no corresponding value. The nine names and the `{observed_at,signals}` envelope are the product wire contract.
 
 The poller coalesces concurrent refreshes for one auth, follows the service lifecycle, and stops all timers and workers on cancellation. Quota polling is separate from credential refresh because the Coding Plan API key is static.
 

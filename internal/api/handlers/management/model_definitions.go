@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	codexmodels "github.com/router-for-me/CLIProxyAPI/v7/internal/client/codex/models"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
+	codexmodels "github.com/router-for-me/CLIProxyAPI/v8/internal/client/codex/models"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 )
 
 // GetStaticModelDefinitions returns static model metadata for a given channel.
@@ -74,6 +74,9 @@ func modelDefinitionEntry(model *registry.ModelInfo, codexChannel bool) (map[str
 	if model.MaxContextWindow > 0 {
 		maxContextWindow = model.MaxContextWindow
 	}
+	// Codex windows come from the client catalog that already emits
+	// context_window / max_context_window. Do not copy those numbers into
+	// models.json; other channels use registry ContextLength / MaxContextWindow.
 	if codexChannel {
 		if clientWindow, clientMax, ok := codexmodels.ClientContextWindows(model.ID); ok {
 			if clientWindow > 0 {
