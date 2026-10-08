@@ -235,6 +235,7 @@ func (m *Manager) UpdateRuntimeObservation(ctx context.Context, authID string, a
 		schedulerSnapshot = authClone.Clone()
 	}
 	m.mu.Unlock()
+	releaseMutation()
 	if m.scheduler != nil {
 		m.scheduler.upsertAuth(schedulerSnapshot)
 	}
